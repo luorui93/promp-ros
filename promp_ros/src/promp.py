@@ -32,7 +32,7 @@ class ProMP(object):
         self.demos = self.add_demonstration("training/something")
 
         # synchronize phase of demonstration trajectories
-        self.sync_demos = self.time_scale_trajectory()
+        self.sync_demos, self.alpha = self.sync_trajectory()
 
         # learn weight using least square regression
         # weights: a dictionary storing information for weight matrix
@@ -121,11 +121,33 @@ class ProMP(object):
         return data
 
 
-    def time_alignment_trajectory(self):
+    def sync_trajectory(self):
         """
         Synchornize trajctories with same time scale
         """
-        map(lambd)
+        traj_len = np.array(list(map(lambda traj: len(traj), self.data)))
+        ref_len = int(np.mean(traj_len))
+        alpha = traj_len / ref_len
+        alpha_mean = np.mean(alpha)
+        alpha_var  = np.var(alpha)
+
+        # time synchronize the data to contain same number of points for training
+        # resample all trajecotries to have same points as the "ideal" trajectory
+        # the new trajectory is obtained by interpolating the original data at scaled time point
+        sync_data = []
+        for i, a in enumerate(alpha):
+            resampled_data = np.empty((ref_len, self.dof))
+            for j in range(ref_len):
+                # the unwarped phase
+                z = j * a
+                floor_z = int(z)
+                if floor_z == self.data[i].shape[0] - 1:
+                    scaled_value = self.data[i][floor_z]
+                else:
+                    scaled_value = self.data[i][floor_z] + (z-floor_z)*(self.data[i][floor_z+1] - self.data[i][floor_z])
+                resampled_data[j] = scaled_value
+            sync_data.append(resampled_data)
+        return sync_data, alpha
 
     def add_viapoints(self, viapoint):
         """
