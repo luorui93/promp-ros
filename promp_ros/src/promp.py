@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 from scipy.stats import multivariate_normal
 from scipy.linalg import block_diag
 
+eps = 1e-10
+
 class ProMP(object):
     def __init__(self, dt, n_basis, demo_addr, n_demos):
         self.dt = dt
@@ -25,7 +27,9 @@ class ProMP(object):
         # self.demos = self.add_demonstration()
 
         # synchronize phase of demonstration trajectories
-        self.sync_demos, self.alpha, self.alpha_mean, self.alpha_var = self.sync_trajectory()
+        self.sync_demos, self.alpha, self.alpha_mean, self.alpha_std = self.sync_trajectory()
+        # start diverging
+        # print(self.sync_demos[2])
         # obtain necessary information from synced demonstrations
         self.n_samples = self.sync_demos[0].shape[0]
         self.dof = self.sync_demos[0].shape[1]
@@ -33,6 +37,7 @@ class ProMP(object):
         # Generate Basis
         # Phi_norm: n_samples x n_basis matrix
         self.Phi_norm = self.generate_basis()
+        
         # diagonally concatenate the big PHI with basis matrices
         self.PHI = np.zeros((self.dof*self.n_samples, self.dof*self.n_basis))
         for i in range(self.dof):
@@ -41,9 +46,10 @@ class ProMP(object):
         # learn weight using least square regression
         # weights: a dictionary storing information for weight matrix
         self.weights = self.learn_weight()
+        # print(self.weights['mean'])
 
         # update mean and cov based on viapoints
-        self.condition_viapoints()
+        # self.condition_viapoints()
 
     def generate_basis(self, time_sample=None):
         """
@@ -52,21 +58,23 @@ class ProMP(object):
         # set initial parameters for Gaussian basis
         duration = self.dt * self.n_samples
         basis_center = np.linspace(0, duration, self.n_basis)
-        sigma = 0.05
+        # SUPER IMPORTANT PARAMETER!!!! Would affect the result a lot!
+        cov = self.dt * 5
 
         # evenly sample gaussian basis
-        if time_sample == None:
+        if time_sample is None:
             time_sample = np.linspace(0, duration-self.dt, self.n_samples)
         # n_basis x n_samples matrix
         basis_unit = np.array(list(
             # evenly sample n_samples gaussian bases 
-            map(lambda c: multivariate_normal.pdf(time_sample, mean=c, cov=sigma**2), basis_center)))
+            map(lambda c: multivariate_normal.pdf(x=time_sample, mean=c, cov=cov), basis_center)))
 
         # n_samples x n_basis matrix
         Phi = basis_unit.T
 
         # normalize basis weights
         Phi_norm = Phi / np.sum(Phi, axis=1)[:, np.newaxis]
+        # print(time_sample)
         
         return Phi_norm
     
@@ -89,11 +97,11 @@ class ProMP(object):
         for i, traj in enumerate(self.sync_demos):
             y = traj.flatten(order='F')
             Y[:,i] = y
-        # print([y.shape for y in Y])
+
         # convert Y into compatible format for linear regression
         Y = np.array(traj).flatten(order='F')[:,np.newaxis]
         w = np.linalg.solve(self.PHI.T@self.PHI, np.dot(self.PHI.T, Y))
-        print(w.shape)
+        # print(w.shape)
 
         # The weight value for each dimension is treated as a Gaussian random variable
         # The mean value is calculated across multiple demos instead of different dimensions.
@@ -138,7 +146,10 @@ class ProMP(object):
         """
         data = []
         for i in range(self.n_demos):
-            traj = np.loadtxt(open(self.demo_addr + str(i+1) + ".csv"), delimiter=",")
+            human = np.loadtxt(open(self.demo_addr + str(i+1) + ".csv"), delimiter=",")
+            # temporal hack to test program
+            robot = np.loadtxt(open('../training/letter/letterBtr' + str(i+1) + ".csv"), delimiter=",")
+            traj = np.hstack((human, robot))
             data.append(traj)
 
         return data
@@ -153,7 +164,7 @@ class ProMP(object):
         ref_len = int(np.mean(traj_len))
         alpha = traj_len / ref_len
         alpha_mean = np.mean(alpha)
-        alpha_var  = np.var(alpha)
+        alpha_std  = np.std(alpha)
 
         # time synchronize the data to contain same number of points for training
         # resample all trajecotries to have same points as the "ideal" trajectory
@@ -171,40 +182,66 @@ class ProMP(object):
                     scaled_value = self.demos[i][floor_z] + (z-floor_z)*(self.demos[i][floor_z+1] - self.demos[i][floor_z])
                 resampled_data[j] = scaled_value
             sync_data.append(resampled_data)
-        return sync_data, alpha, alpha_mean, alpha_var
+        return sync_data, alpha, alpha_mean, alpha_std
 
-    def add_viapoints(self, viapoint):
+    def predict(self, traj):
         """
-        Add viapoints for conditioning 
+        Predict new trajectory based on given traj
         Each viapoint has the following field:
         t: phase time of the viapoint
         mean: mean joint position of the viapoint
         cov: covariance matrix of the viapoint
         """
-        self.viapoints.append(viapoint)
+        # add viapoints from traj
+        viapoints = []
+        vp = {}
+        sigma = 0.5
+        for i, p in enumerate(traj):
+            vp['t'] = i
+            vp['mean'] = p
+            vp['cov'] = sigma * np.identity(self.dof)
+            viapoints.append(vp)
+        
+        # predict new trajectory based on given viapoints
+        mean, cov = self.condition_viapoints(viapoints)
+        self.weights['updated_mean'] = mean
+        self.weights['updated_cov']  = cov
+        new_traj = self.generate_trajectory(self.weights['updated_mean'])
+        print(new_traj.shape)
+        return new_traj
 
-    def condition_viapoints(self):
+    def condition_viapoints(self, viapoints):
         """
-        Update posterior mean and cov by conditioning on viapoints
+        Update posterior mean and cov by conditioning on viapoints/observations
+        Each viapoint contains the joint position mean/cov and synchronized timestep
         """
         mean = self.weights['mean'].copy()
         cov  = self.weights['cov'].copy()
 
         # iterate over all viapoints to 
         # update posterior mean and covariance matrix by conditioning
-        for viapoint in self.viapoints:
+        for viapoint in viapoints:
             phase = viapoint['t']
             v_mean = viapoint['mean']
             v_cov = viapoint['cov']
 
-            # retrieve the weight vector at the same phase in multiple dof we are interested
+            # retrieve valid dof index
+            valid_dof = np.arange(0, self.dof)
+            valid_dof = valid_dof[~np.isnan(v_mean)]
+            # non valid basis will stay zero
             # PHI: dof*n_sample x dof*n_basis
-            basis = self.PHI[[phase*+i*self.n_samples for i in range(self.dof)], :]
+            # retrieve the basis at the same phase and valid dof
+            basis = np.zeros((self.dof, self.dof*self.n_basis))
+            basis[valid_dof,:] = self.PHI[[phase+i*self.n_samples for i in valid_dof],:]
+            # print(basis)
 
             if (basis.ndim == 1):
                 basis = basis[:, np.newaxis]
             else:
                 basis = basis.T
+            
+            # now set all NaN to 0
+            v_mean[np.isnan(v_mean)] = 0.0
 
             # conditioning
             inv = np.linalg.inv(v_cov + basis.T @ cov @ basis)
@@ -216,34 +253,58 @@ class ProMP(object):
             # we could output new mean and cov every iteration for online planning
 
         # delete viapoints that are already conditioned
-        self.viapoints.clear()
+        # self.viapoints.clear()
 
         # save new mean and cov, compute new trajectory
-        self.weights['mean'] = mean
-        self.weights['cov']  = cov
+        return mean, cov
     
     def estimate_phase(self, partial_traj):
-        # sample some alphas from the trained distribution
-        alpha_samples = np.random.normal(self.alpha_mean, self.alpha_var, 10)
+        # sample some alphas from the trained alpha distribution
+        # probably should evenly sample
+        alpha_samples = np.linspace(self.alpha_mean - 2*self.alpha_std, self.alpha_mean + 2*self.alpha_std, 20)
+        # alpha_samples = np.random.normal(self.alpha_mean, self.alpha_std, 20)
+        # print(alpha_samples)
         for alpha in alpha_samples:
             # we assume the partial_traj also starts from the begining
-            time_sample = np.array([i*self.dt for i in range(len(partial_traj))]) * (1 / alpha)
+            traj_len = partial_traj.shape[0]
+            time_sample = np.array([i*self.dt for i in range(traj_len)]) * (1 / alpha)
             Phi = self.generate_basis(time_sample)
-            
+            A = np.zeros((self.dof*Phi.shape[0], self.dof*Phi.shape[1]))
+            for i in range(self.dof):
+                A[i*Phi.shape[0]:(i+1)*Phi.shape[0], i*Phi.shape[1]:(i+1)*Phi.shape[1]] = Phi
+            # print(A)
 
-    def generate_trajectory(self):
-        new_traj = np.dot(self.PHI, self.weights['mean'])
+    def generate_trajectory(self, weight):
+        """
+        Generate trajectory given weight using mean value
+        """
+        new_traj = np.dot(self.PHI, weight)
         # reshape new_traj following the defined trajectory format: n_samples x n_dof
         new_traj = new_traj.reshape((self.dof, self.n_samples)).T
         return new_traj
     
     def plot(self):
-        figure1 = plt.figure(figsize=(10,10))
+        figure1 = plt.figure(figsize=(5,5))
         ax = figure1.add_subplot(111)
-        traj = self.sync_demos[11]
-        y = traj.flatten(order='F')
-        ax.plot(y[:self.n_samples], y[self.n_samples:], 'o')
+        ax.set_title("J1 trajectory")
+        traj = self.generate_trajectory(self.weights['mean'])
+        print(traj.shape)
+        # print(self.weights['mean'].shape)
+        # y = traj.flatten(order='F')
+        ax.plot(np.linspace(0,1,self.n_samples), traj[:, 0], 'o')
+
+        plt.figure(2, figsize=(5,5))
+        plt.title("J2 trajectory")
+        plt.plot(np.linspace(0,1,self.n_samples), traj[:, 1], 'o')
         plt.show()
+    
+    def plot_trajectory(self, traj, title):
+        plt.figure(1, figsize=(5,5))
+        plt.title(title)
+        plt.plot(np.linspace(0,1,len(traj)), traj, 'o')
+        plt.show()
+
+    
 
     ### define properties
     # @property
@@ -266,4 +327,21 @@ class ProMP(object):
 if __name__ == "__main__":
     pmp = ProMP(dt=0.5, n_basis=20, demo_addr='../training/letter/letterAtr', n_demos=45)
     pmp.main()
-    pmp.plot()
+    # pmp.plot()
+    test_traj = np.array([[0,0],[0.003,0.0002],[0.0088,0.0009]])
+    pmp.estimate_phase(test_traj)
+    # print(pmp.weights['mean'])
+
+    # test case for predicting new trajctory given partial observation
+    test_traj = np.loadtxt(open("../training/letter/letterAtr48.csv"), delimiter=",")
+    partial_traj = test_traj[0:1,]
+    # padding the partial trajectory to be the same standard format, fill unknown value with np.nan
+    nan_traj = np.empty(partial_traj.shape)
+    nan_traj[:] = np.nan
+    padded_traj = np.hstack((partial_traj, nan_traj))
+    # print(padded_traj)
+    new_traj = pmp.predict(padded_traj)
+    # print(new_traj)
+    pmp.plot_trajectory(new_traj[:, 0], "Updated Trajectory")
+
+    
