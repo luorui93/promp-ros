@@ -117,13 +117,9 @@ class ProMP(object):
         # return a n_variable x n_variable matrix, the covariance matrix is defaultly calculated as unbiased one
         cov_w = np.cov(w, bias=True)   #20 x 20 covariance matrix, n_basis=20
 
-        #this is equal to sigma_w = np.std(w, axis=1)
-        std_w = np.sqrt(cov_w.diagonal())
-
         weights['w'] = w
         weights['mean'] = mean_w
         weights['cov'] = cov_w
-        weights['std'] = std_w
         # print(f"weights: {weights['w']}")
 
         return weights
@@ -209,7 +205,7 @@ class ProMP(object):
         mean, cov = self.condition_viapoints(viapoints)
         self.weights['updated_mean'] = mean
         self.weights['updated_cov']  = cov
-        new_traj = self.generate_trajectory(self.weights['updated_mean'])
+        new_traj = self.generate_trajectory(self.weights['updated_mean'], self.weights['updated_cov'])
         # print(new_traj.shape)
         return new_traj
 
@@ -263,20 +259,57 @@ class ProMP(object):
         return mean, cov
     
     def estimate_phase(self, partial_traj):
+        # partial_traj will be in the standard trajectory format
         # sample some alphas from the trained alpha distribution
         # probably should evenly sample
-        alpha_samples = np.linspace(self.alpha_mean - 2*self.alpha_std, self.alpha_mean + 2*self.alpha_std, 20)
+        alpha_samples = np.linspace(self.alpha_mean - 2*self.alpha_std, self.alpha_mean + 2*self.alpha_std, 10)
+        # print(f"alpha samples: \n{alpha_samples}")
         # alpha_samples = np.random.normal(self.alpha_mean, self.alpha_std, 20)
-        # print(alpha_samples)
-        for alpha in alpha_samples:
-            # we assume the partial_traj also starts from the begining
-            traj_len = partial_traj.shape[0]
-            time_sample = np.array([i*self.dt for i in range(traj_len)]) * (1 / alpha)
-            Phi = self.generate_basis(time_sample)
-            A = np.zeros((self.dof*Phi.shape[0], self.dof*Phi.shape[1]))
-            for i in range(self.dof):
-                A[i*Phi.shape[0]:(i+1)*Phi.shape[0], i*Phi.shape[1]:(i+1)*Phi.shape[1]] = Phi
-            # print(A)
+
+        # print(f"observed traj: \n{partial_traj}")
+        # compute the priori probability P(alpha)
+        prior_alpha = multivariate_normal.pdf(x = alpha_samples, mean = self.alpha_mean, cov=self.alpha_std**2)
+
+        # do an outer product to compute a grid of z=alpha*t
+        nobs_samples = partial_traj.shape[0]
+        nobs_dof = partial_traj.shape[1]
+        ref_t = np.arange(nobs_samples)
+        # print(f"ref_t: {ref_t}")
+        z_grid = np.dot(alpha_samples[:,np.newaxis] ,ref_t[:,np.newaxis].T)
+        # print(f"z_grdi: {z_grid}")
+
+        obs_interp_traj = []
+
+        for z in z_grid:
+            # trajectory interpolates with one z for all dof
+            single_traj = np.array(list(map(lambda fp: np.interp(z, ref_t, fp), partial_traj.T))).T
+            obs_interp_traj.append(single_traj)
+        
+        # obs_interp_traj is a 3d matrix
+        # first dimension is the number of alpha
+        # in which each element is a n_samples(time_index) x dof trajectory
+        obs_interp_traj = np.array(obs_interp_traj)
+
+        # compute trajectory's trained mean and cov
+        mean, cov = self.generate_trajectory(self.weights['mean'], self.weights['cov'])
+
+        for index in range(nobs_samples):
+            # retrieve trajectory point at the same time index with all possible alpha
+            sample = obs_interp_traj[:, index, :]
+
+            # compute likelihood for all alpha candidates at the same index 
+            # however, due to the partial nature of the observance, some dof might be missing
+            # so we are calculating the marginal probability of a multivariate gaussian
+            m = mean[[index + i*self.n_samples for i in range(nobs_dof)]]
+            # TO EDIT
+            c = np.identity(nobs_dof) * self.obs_sigma
+            print(sample)
+            print(m)
+            likelihood = multivariate_normal.pdf(x = sample, mean = m, cov=c)
+            print(likelihood[0])
+
+        # for interp_y in obs_interp_traj:
+            
     
     def reshape_trajectory(self, column_traj):
         """
@@ -285,16 +318,16 @@ class ProMP(object):
         standard_traj = column_traj.reshape((self.dof, self.n_samples)).T
         return standard_traj
 
-    def generate_trajectory(self, weight):
+    def generate_trajectory(self, weight_mean, weight_cov):
         """
         Generate trajectory given weight using mean value
         """
         # calculate trajectory mean value for each sample time
-        new_traj_mean = np.dot(self.PHI, weight)
+        new_traj_mean = np.dot(self.PHI, weight_mean)
 
         # calculate covariance matrix for the trajcetory
         obs_cov = self.obs_sigma * np.identity(self.n_samples * self.dof)
-        new_traj_cov  = self.PHI @ self.weights['cov'] @ self.PHI.T + obs_cov
+        new_traj_cov  = self.PHI @ weight_cov @ self.PHI.T + obs_cov
 
         return new_traj_mean, new_traj_cov
     
@@ -302,7 +335,7 @@ class ProMP(object):
         figure1 = plt.figure(1, figsize=(5,5))
         ax = figure1.add_subplot(111)
         ax.set_title("J1 trajectory")
-        traj_mean, traj_cov = self.generate_trajectory(self.weights['mean'])
+        traj_mean, traj_cov = self.generate_trajectory(self.weights['mean'], self.weights['cov'])
 
         # reshape trajectory for plotting
         format_traj = self.reshape_trajectory(traj_mean)
@@ -361,7 +394,7 @@ if __name__ == "__main__":
 
     # train model
     pmp.main()
-    pmp.plot(plot_error=True)
+    # pmp.plot(plot_error=True)
     # print(f"trained cov: {pmp.weights['cov']}")
 
     #################################################
@@ -378,5 +411,6 @@ if __name__ == "__main__":
     # print(new_traj)
     # pmp.plot_trajectory(new_traj[:, 0], "Updated Trajectory")
     # print(f"updated cov: {pmp.weights['updated_cov']}")
+    pmp.estimate_phase(partial_traj)
 
     
