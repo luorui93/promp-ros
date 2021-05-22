@@ -6,6 +6,16 @@ from scipy.linalg import block_diag
 
 eps = 1e-10
 
+def timeit(method):
+    def timed(*args, **kw):
+        ts = time.time()
+        result = method(*args, **kw)
+        te = time.time()        
+        t = (te - ts) * 1000
+        print (f"{method.__name__} lasts {t}ms")
+        return result    
+    return timed
+
 class ProMP(object):
     def __init__(self, dt, n_basis, demo_addr, n_demos):
         self.dt = dt
@@ -15,7 +25,7 @@ class ProMP(object):
         self.dof = 0
         self.demo_addr = demo_addr
         self.viapoints = []
-        self.obs_sigma = 5e-5
+        self.obs_sigma = 5e-2
         self.basis_sigma = self.dt * 5
 
     def main(self):
@@ -258,6 +268,7 @@ class ProMP(object):
         # save new mean and cov, compute new trajectory
         return mean, cov
     
+    @timeit
     def estimate_phase(self, partial_traj):
         # partial_traj will be in the standard trajectory format
         # sample some alphas from the trained alpha distribution
@@ -293,6 +304,7 @@ class ProMP(object):
         # compute trajectory's trained mean and cov
         mean, cov = self.generate_trajectory(self.weights['mean'], self.weights['cov'])
 
+        log_p = np.zeros(alpha_samples.shape)
         for index in range(nobs_samples):
             # retrieve trajectory point at the same time index with all possible alpha
             sample = obs_interp_traj[:, index, :]
@@ -301,12 +313,21 @@ class ProMP(object):
             # however, due to the partial nature of the observance, some dof might be missing
             # so we are calculating the marginal probability of a multivariate gaussian
             m = mean[[index + i*self.n_samples for i in range(nobs_dof)]]
+            # print(m)
             # TO EDIT
             c = np.identity(nobs_dof) * self.obs_sigma
-            print(sample)
-            print(m)
+
+            # print(f"alpha*t sample: \n {sample}")
             likelihood = multivariate_normal.pdf(x = sample, mean = m, cov=c)
-            print(likelihood[0])
+            posteriori = likelihood * prior_alpha
+            posteriori = posteriori / np.sum(posteriori)
+            log_p = log_p + np.log(posteriori)
+            # print(f"log posteriori: \n{log_p}")
+            # print(f"pdf: {result}")
+        
+        best_alpha = alpha_samples[np.argmax(log_p)]
+        # print(f"best alpha: {best_alpha}")
+        return best_alpha
 
         # for interp_y in obs_interp_traj:
             
@@ -411,6 +432,6 @@ if __name__ == "__main__":
     # print(new_traj)
     # pmp.plot_trajectory(new_traj[:, 0], "Updated Trajectory")
     # print(f"updated cov: {pmp.weights['updated_cov']}")
-    pmp.estimate_phase(partial_traj)
+    phase = pmp.estimate_phase(partial_traj)
 
     
