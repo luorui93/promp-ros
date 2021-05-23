@@ -196,18 +196,23 @@ class ProMP(object):
             sync_data.append(resampled_data)
         return sync_data, alpha, alpha_mean, alpha_std
 
-    def predict(self, traj):
+    def predict(self, obs_traj):
         """
-        Predict new trajectory based on given traj
+        Predict new trajectory based on observed trajectory
         Each viapoint has the following field:
         t: phase time of the viapoint
         mean: mean joint position of the viapoint
         cov: covariance matrix of the viapoint
+
+        Returns:
+        -------
+        new_traj_stat
+            a tuple which contains the mean and covariance matrix of the joint position on the predicted trajectory
         """
         # add viapoints from traj
         viapoints = []
         sigma = self.obs_sigma
-        for i, p in enumerate(traj):
+        for i, p in enumerate(obs_traj):
             vp = {}
             vp['t'] = i
             vp['mean'] = p
@@ -218,14 +223,23 @@ class ProMP(object):
         mean, cov = self.condition_viapoints(viapoints)
         self.weights['updated_mean'] = mean
         self.weights['updated_cov']  = cov
-        new_traj = self.compute_trajectory_stat(self.weights['updated_mean'], self.weights['updated_cov'])
+
+        # returned trajectory tuple (mean, cov)
+        new_traj_stat = self.compute_trajectory_stat(self.weights['updated_mean'], self.weights['updated_cov'])
         # print(new_traj.shape)
-        return new_traj
+        return new_traj_stat
 
     def condition_viapoints(self, viapoints):
         """
         Update posterior mean and cov by conditioning on viapoints/observations
         Each viapoint contains the joint position mean/cov and synchronized timestep
+
+        Returns:
+        -------
+        mean
+            the updated weight vector means
+        cov 
+            the updated weight vector covrariance
         """
         mean = self.weights['mean'].copy()
         cov  = self.weights['cov'].copy()
@@ -307,6 +321,7 @@ class ProMP(object):
         # compute trajectory's trained mean and cov
         mean, cov = self.compute_trajectory_stat(self.weights['mean'], self.weights['cov'])
 
+        # log posteriori
         log_p = np.zeros(alpha_samples.shape)
         for index in range(nobs_samples):
             # retrieve trajectory point at the same time index with all possible alpha
@@ -340,8 +355,8 @@ class ProMP(object):
         """
         Reshape a n_dof*n_sample x 1 column trajectory to standard format trajectory
         """
-        standard_traj = column_traj.reshape((self.dof, self.n_samples)).T
-        return standard_traj
+        matrix_traj = column_traj.reshape((self.dof, self.n_samples)).T
+        return matrix_traj
 
     def compute_trajectory_stat(self, weight_mean, weight_cov):
         """
@@ -350,12 +365,18 @@ class ProMP(object):
         # calculate trajectory mean value for each sample time
         new_traj_mean = np.dot(self.PHI, weight_mean)
 
-        # calculate covariance matrix for the trajcetory
-        # obs_cov = self.obs_sigma * np.identity(self.n_samples * self.dof)
+        # calculate concatenated covariance matrix for the trajcetory
+        # refer to estimate_phase on how to retrive the correct covariance matrix
         new_traj_cov  = self.PHI @ weight_cov @ self.PHI.T 
         # np.savetxt('../training/trained/traj_cov.csv', new_traj_cov, delimiter=",")
 
         return new_traj_mean, new_traj_cov
+    
+    def padding_trajectory(self):
+        """
+        Padding partial trajectory to become the correct shape
+        """
+        pass
     
     def plot(self, plot_error=False):
         figure1 = plt.figure(1, figsize=(5,5))
@@ -388,11 +409,37 @@ class ProMP(object):
         # plt.plot(np.linspace(0,1,self.n_samples), traj[:, 1], 'o')
         plt.show()
     
-    def plot_trajectory(self, traj, title, plot_error=False):
+    def plot_trajectory(self, traj, joint, title, plot_error=False):
+        """
+        Parameters:
+        ----------
+        traj
+            a tuple contains the column trajectory mean and concatenated trajectory
+        joint
+            the specific joint trajectory to be plotted
+        """
         plt.figure(2, figsize=(5,5))
         plt.title(title)
-        t = np.linspace(0,1,len(traj))
-        plt.plot(t, traj, '-')
+
+        mean = traj[0]
+        cov  = traj[1]
+        # reshape trajectory for plotting
+        format_traj = self.reshape_trajectory(mean)
+
+        # only plot one joint 
+        plot_traj = format_traj[:, joint]
+        t = np.linspace(0,1,len(plot_traj))
+        plt.plot(t, plot_traj, 'o')
+
+        if plot_error:
+            # we only plot std deviation
+            std_full = np.sqrt(cov.diagonal())
+            std_full = std_full.reshape((self.dof, self.n_samples)).T
+            std_joint = std_full[:, joint][0:len(plot_traj)]
+
+            upper_y = plot_traj + std_joint
+            lower_y = plot_traj - std_joint
+            plt.fill_between(t, upper_y.flatten(), lower_y.flatten(), alpha=0.4)
         plt.show()
 
     
@@ -410,8 +457,8 @@ class ProMP(object):
     # def weights(self):
     #     return self.weights
     
-    # @property
-    # def dt(self):
+    
+    
     #     return self.dt
 
 
@@ -427,7 +474,7 @@ if __name__ == "__main__":
     # print(f"trained cov: {pmp.weights['cov']}")
 
     #################################################
-    # test case for predicting new trajctory given partial observation
+    # example for predicting new trajctory given partial observation
     test_traj = np.loadtxt(open("../training/plug/file_output_9"), delimiter=",")
     partial_traj = test_traj[0:10,]
 
@@ -436,12 +483,13 @@ if __name__ == "__main__":
     # nan_traj = np.empty(partial_traj.shape)
     # nan_traj[:] = np.nan
     # padded_traj = np.hstack((partial_traj, nan_traj))
-    # print(padded_traj)
 
-    # new_traj = pmp.predict(padded_traj)
-    # print(new_traj)
+    # return the updated trajectory mean and cov
+    # traj_stat = pmp.predict(padded_traj)
+    # reformat the obtained column trajectory
+    # mat_traj = pmp.reshape_trajectory(traj_stat[0])
 
-    # pmp.plot_trajectory(new_traj[:, 0], "Updated Trajectory")
+    # pmp.plot_trajectory(traj=traj_stat, joint=0, title="Updated J1 Trajectory", plot_error=False)
     # print(f"updated cov: {pmp.weights['updated_cov']}")
 
     phase = pmp.estimate_phase(partial_traj)
