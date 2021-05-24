@@ -346,7 +346,8 @@ class ProMP(object):
         
         best_alpha = alpha_samples[np.argmax(log_p)]
         # print(f"best alpha: {best_alpha}")
-        return best_alpha
+        phase = (nobs_samples - 1) / best_alpha
+        return best_alpha, phase
 
         # for interp_y in obs_interp_traj:
             
@@ -492,6 +493,6 @@ if __name__ == "__main__":
     # pmp.plot_trajectory(traj=traj_stat, joint=0, title="Updated J1 Trajectory", plot_error=False)
     # print(f"updated cov: {pmp.weights['updated_cov']}")
 
-    phase = pmp.estimate_phase(partial_traj)
+    alpha, phase = pmp.estimate_phase(partial_traj)
 
     
