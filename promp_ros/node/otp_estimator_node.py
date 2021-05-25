@@ -9,6 +9,7 @@ from apriltag_ros.msg import AprilTagDetectionArray, AprilTagDetection
 import trajectory_msgs
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 import message_filters
+import matplotlib.pyplot as plt
 
 class OTPEstimator(object):
     def __init__(self):
@@ -23,6 +24,7 @@ class OTPEstimator(object):
         kinova_sub = message_filters.Subscriber("/my_gen3/joint_states", JointState)
         tag_sub = message_filters.Subscriber("/tag_detections", AprilTagDetectionArray)
         time_sync = message_filters.ApproximateTimeSynchronizer([kinova_sub, tag_sub], 10, slop=0.2)
+        #debug subscriber
         time_sync.registerCallback(self.data_filter_cb)
 
         ## ROS publishers
@@ -108,7 +110,8 @@ class OTPEstimator(object):
                 self.robot_joint_trajectory.joint_names = robot_msg.name[0:7]
             robot_time = robot_msg.header.stamp
             socket_time = socket_msg.header.stamp
-            t = self.diff_time(robot_time, self.init_time)
+            # add a small displacement to time
+            t = self.diff_time(robot_time, self.init_time) + 30
             self.sample_time.append(t)
             # self.sample_time.append(self.diff_time(socket_time, self.init_time))
 
@@ -120,24 +123,76 @@ class OTPEstimator(object):
 
             self.robot_joint_trajectory.points.append(sample_point)
     
+    def save_training_data(self, index):
+        """
+        Save trajectory data for training
+        """
+        # convert robot joint trajectory into numpy array
+        joint_array = np.array()
+        np.savetxt('../training/plug/hrc_traj_'+index+'.csv', joint_array, delimiter=",")
+    
     def publish_planned_trajectory(self):
         self.robot_joint_trajectory.header.stamp = rospy.Time.now()
         self.planned_traj_pub.publish(self.robot_joint_trajectory)
-        
-    def start_recording(self):
-        self.start_record = True
 
+    def record_data(self, time):
+        input("Enter to start recording")
+        opte.start_record = True
+        rospy.sleep(time)
+        opte.start_record = False
+        rospy.loginfo("Finished recording")
+    
+    def plot_traj(self, joint_trajectory, index=1):
+        fig = plt.figure(index, figsize=(10,20))
+
+        ax1 = fig.add_subplot(311)
+        t = np.arange(len(joint_trajectory.points))
+        y = []
+        for point in joint_trajectory.points:
+            y.append(point.positions)
+        y = np.array(y)
+        for joint in range(y.shape[1]):
+           ax1.plot(t, y[:,joint], label=f"joint{joint}")
+        ax1.set_title("Position")
+        plt.legend(loc="upper left")
+
+        ax2 = fig.add_subplot(312)
+        y = []
+        for point in joint_trajectory.points:
+            y.append(point.velocities)
+        y = np.array(y)
+        for joint in range(y.shape[1]):
+           ax2.plot(t, y[:,joint], label=f"joint{joint}")
+        ax2.set_title("Velocity")
+        plt.legend(loc="upper left")
+
+        ax3 = fig.add_subplot(313)
+        y = []
+        for point in joint_trajectory.points:
+            y.append(point.accelerations)
+        y = np.array(y)
+        for joint in range(y.shape[1]):
+           ax3.plot(t, y[:,joint], label=f"joint{joint}")
+        ax3.set_title("Acceleration")
+        plt.legend(loc="upper left")
+        
 if __name__ == "__main__":
-    rospy.init_node("otp_estimator", log_level=rospy.DEBUG)
+    rospy.init_node("otp_estimator", log_level=rospy.INFO)
     
     opte = OTPEstimator()
 
     # rospy.Timer(rospy.Duration(0.001), lambda timer_event: print(opte.sample_time[-1]))
     # opte.data_filter(20)
-    opte.start_recording()
-    rospy.sleep(2)
-    opte.publish_planned_trajectory()
+    opte.record_data(2)
+    # opte.plot_traj(opte.robot_joint_trajectory)
 
-    # rospy.spin()
+    
+    opte.publish_planned_trajectory()
+    msg = rospy.wait_for_message("/smoothed_trajectory", JointTrajectory)
+    opte.plot_traj(msg, 1)
+    plt.show()
+
+    rospy.spin()
+
 
 
