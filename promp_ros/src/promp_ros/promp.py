@@ -137,7 +137,7 @@ class ProMP(object):
         # the dependent vector (y) should be the format:
         # [y11, y21, y31,... y_sample_1, y12, y22, y32, ... y_sample_2, ... y_sample_ndof].T
         # the vector is listed in sample-first order
-        Y = np.empty((self.dof*self.n_samples, self.n_demos))
+        Y = np.empty((self.dof*self.n_samples, len(self.sync_demos)))
         for i, traj in enumerate(self.sync_demos):
             y = traj.flatten(order='F')
             Y[:,i] = y
@@ -162,6 +162,8 @@ class ProMP(object):
         weights['w'] = w
         weights['mean'] = mean_w
         weights['cov'] = cov_w
+        print(f"weights first row: {w[0,:]}")
+        print(f"weight cov (0,0): {cov_w[0,0]}")
         # print(f"weights: {weights['w']}")
 
         return weights
