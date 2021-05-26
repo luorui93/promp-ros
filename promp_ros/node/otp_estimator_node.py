@@ -14,13 +14,14 @@ import matplotlib.pyplot as plt
 import copy
 from scipy import signal
 from scipy.ndimage import uniform_filter1d
-from scipy.interpolate import CubicSpline
+from scipy.interpolate import CubicSpline, splrep, splev
 
 
 class OTPEstimator(object):
-    def __init__(self):
+    def __init__(self, data_addr):
         ## Pro-MP
         self.dt = 0.0333
+        self.data_addr = data_addr
 
         ## OTP calculation
         self.otp_d = Pose()
@@ -152,10 +153,7 @@ class OTPEstimator(object):
         # left: robot array    right: socket array
         training_array = np.concatenate((robot_array, socket_array), axis=1)
 
-        r = rospkg.RosPack()
-        path = r.get_path('promp_ros')
-        self.data_addr = path+'/training/plug'
-        np.savetxt(self.data_addr+'/hrc_traj_'+str(index)+'.csv', training_array, delimiter=",")
+        np.savetxt(self.data_addr+str(index)+'.csv', training_array, delimiter=",")
         rospy.loginfo("Training data saved to "+self.data_addr+'/hrc_traj_'+str(index)+'.csv')
 
     def publish_trajectory(self, traj_list):
@@ -190,6 +188,33 @@ class OTPEstimator(object):
         res_robot_joint_traj = copy.deepcopy(traj[0:l:step])
         return res_robot_joint_traj
     
+    def interpolate_traj(self, traj, spline_order=3):
+        interp_traj = []
+        for point in traj:
+            interp_traj.append(point.positions)
+        interp_traj = np.array(interp_traj)
+
+        # interpolate trajectory using a cubice spline
+        t = self.dt * np.arange(interp_traj.shape[0])
+        dense_t = np.linspace(0, t[-1], 1000)
+        interp_pos = np.empty((len(dense_t), interp_traj.shape[1]))
+        interp_vel = np.empty(interp_pos.shape)
+        interp_acc = np.empty(interp_pos.shape)
+        if spline_order == 3:
+            for d in range(interp_traj.shape[1]):
+                # b-spline interpolation
+                bs = splrep(t, interp_traj[:,d], k=3)
+                interp_pos[:,d] = splev(dense_t, bs, 0)
+                interp_vel[:,d] = splev(dense_t, bs, 1)
+                interp_acc[:,d] = splev(dense_t, bs, 2)
+            # cs = CubicSpline(t, interp_traj, axis=0)
+            # interp_pos = cs(dense_t, 0)
+            # interp_vel = cs(dense_t, 1)
+            # interp_acc = cs(dense_t, 2)
+
+        self.plot_interp_traj(dense_t, interp_pos, interp_vel, interp_acc)
+
+    
     def list_to_array(self, traj_list, type):
         """
         Convert robot joint or socket pose trajectory list to numpy array
@@ -217,8 +242,8 @@ class OTPEstimator(object):
 
         return traj_array
 
-    def train_promp(self):
-        self.promp = ProMP(self.dt, n_basis=20, demo_addr=self.data_addr+'/hrc_traj', n_demos=40)
+    def train_promp(self, n_basis, n_demos, n_dof):
+        self.promp = ProMP(self.dt, n_basis=n_basis, demo_addr=self.data_addr, n_demos=n_demos, n_dof=n_dof)
 
     ############################TEST FUNCTIONS############################3
     def test_conversion(self, traj=None):
@@ -276,54 +301,59 @@ class OTPEstimator(object):
         
         # self.plot_interp_traj(joint_trajectory)
     
-    def plot_interp_traj(self, joint_trajectory):
+    def plot_interp_traj(self, t, pos, vel, acc):
         fig = plt.figure(2, figsize=(10,20))
-        t = np.arange(len(joint_trajectory))
-        interp_t = np.linspace(0, t[-1], int(t[-1]/30*1000))
-
-        # position
         ax1 = fig.add_subplot(311)
-        y = []
-        for point in joint_trajectory:
-            y.append(point.positions)
-        y = np.array(y)
-        interp_y = np.empty((len(interp_t), y.shape[1]))
-        for d in range(y.shape[1]):
-            cs1 = CubicSpline(t, y[:,d])
-            interp_y[:,d] = cs1(interp_t)
-        for joint in range(interp_y.shape[1]):
-           ax1.plot(interp_t, interp_y[:,joint], label=f"joint{joint}")
-        ax1.set_title("Interpolated Position")
-        plt.legend(loc="upper left")
-
+        ax1.plot(t, pos)
+        ax1.set_title("Position")
         ax2 = fig.add_subplot(312)
+        ax2.plot(t, vel)
+        ax2.set_title("Velocity")
         ax3 = fig.add_subplot(313)
+        ax3.plot(t, acc)
+        ax3.set_title("Acceleration")
         
 if __name__ == "__main__":
     rospy.init_node("otp_estimator", log_level=rospy.INFO)
-    
-    opte = OTPEstimator()
+
+    r = rospkg.RosPack()
+    path = r.get_path('promp_ros')
+    opte = OTPEstimator(path+'/training/plug/hrc_traj_')
 
     ##### record data in time secs
-    opte.record_data(duration=3)
+    # opte.record_data(duration=3)
     # opte.plot_traj(opte.robot_joint_trajectory)
 
     ##### print numpy array format data
     # opte.test_conversion()
+    # opte.interpolate_traj(opte.robot_joint_trajectory, 3)
 
-    resampled_traj = opte.trajectory_resampler(opte.robot_joint_trajectory, 10)
-    opte.publish_trajectory(resampled_traj)
+    # resampled_traj = opte.trajectory_resampler(opte.robot_joint_trajectory, 10)
+    # opte.publish_trajectory(resampled_traj)
     # opte.publish_target_position(opte.robot_joint_trajectory)
     # opte.test_conversion(resampled_traj)
 
     # if (len(sys.argv) < 2):
     #     raise SyntaxError("Insufficient arguments")
     # opte.save_training_data(int(sys.argv[1]))
-    msg = rospy.wait_for_message("/smoothed_trajectory", JointTrajectory)
-    opte.plot_traj(msg, 1)
-    plt.show()
+    # msg = rospy.wait_for_message("/smoothed_trajectory", JointTrajectory)
+    # opte.plot_traj(msg, 1)
+    # plt.show()
 
-    rospy.spin()
+    ##### train promp
+    rospy.loginfo("Start training")
+    opte.train_promp(20, 20, 7)
+    opte.promp.main()
+    rospy.loginfo("Training completed")
+    plot_joint = 0
+    rospy.loginfo(f"plot joint {plot_joint}")
+    opte.promp.plot(plot_joint=plot_joint, plot_error=True)
+    # mean, _ = pmp.compute_trajectory_stat(pmp.weights['mean'], pmp.weights['cov'])
+    # traj = pmp.reshape_trajectory(mean)
+    # print(f"trained trajectory mean: \n{traj}")
+    # print(f"trained cov: {pmp.weights['cov']}")ning completed")
+
+    # rospy.spin()
 
 
 

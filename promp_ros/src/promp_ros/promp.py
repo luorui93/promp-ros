@@ -4,6 +4,9 @@ import matplotlib.pyplot as plt
 from scipy.stats import multivariate_normal
 from scipy.linalg import block_diag
 
+import rospy
+from rospy.core import rospyerr
+
 eps = 1e-10
 
 def timeit(method):
@@ -17,12 +20,12 @@ def timeit(method):
     return timed
 
 class ProMP(object):
-    def __init__(self, dt, n_basis, demo_addr, n_demos):
+    def __init__(self, dt, n_basis, demo_addr, n_demos, n_dof):
         self.dt = dt
         self.n_basis = n_basis
         self.n_demos = n_demos
         self.n_samples = 0
-        self.dof = 0
+        self.dof = n_dof 
         self.demo_addr = demo_addr
         self.viapoints = []
         self.obs_sigma = 5e-2
@@ -33,7 +36,9 @@ class ProMP(object):
         Main function for ProMP
         """
         # demos: n_samples x n_demos matrix
-        self.demos = self.import_demonstrations()
+        cols = [0, 1, 2, 3, 4, 5, 6]#, 14, 15, 16]
+        self.demos = self.import_demonstrations(cols)
+        # print(f"demos: {self.demos[0].shape}")
         # self.demos is a list containing all training trajectories
         # each trajectory is in the format of n_samples x n_dof
         # self.demos = self.add_demonstration()
@@ -44,7 +49,8 @@ class ProMP(object):
         # print(self.sync_demos[2])
         # obtain necessary information from synced demonstrations
         self.n_samples = self.sync_demos[0].shape[0]
-        self.dof = self.sync_demos[0].shape[1]
+        print(f"ref n_samples: {self.n_samples}")
+        # self.dof = self.sync_demos[0].shape[1]
 
         # Generate Basis
         # Phi_norm: n_samples x n_basis matrix
@@ -65,6 +71,29 @@ class ProMP(object):
         # np.savetxt('../training/trained/weight_mean.csv', self.weights['mean'], delimiter=",")
         # update mean and cov based on viapoints
         # self.condition_viapoints()
+
+    def import_demonstrations(self, cols=None):
+        """
+        Import demonstrations from files
+        """
+        data = []
+        for i in range(0, self.n_demos):
+            # human = np.loadtxt(open(self.demo_addr + str(i+1) + ".csv"), delimiter=",")
+            # temporal hack to test program
+            try:
+                addr = self.demo_addr + str(i+1) + ".csv"
+                training_data = np.loadtxt(open(addr), delimiter=",")
+            except OSError:
+                rospy.logerr(f"{addr} is not found")
+                continue
+            # traj = np.hstack((human, robot))
+            if cols is not None:
+                data.append(training_data[:,cols])
+                print(data[-1].shape)
+            else:
+                data.append(training_data)
+
+        return data
 
     def generate_basis(self, time_sample=None):
         """
@@ -151,20 +180,6 @@ class ProMP(object):
         self.n_demos += 2
         
         return Y
-
-    def import_demonstrations(self):
-        """
-        Import demonstrations from files
-        """
-        data = []
-        for i in range(0, self.n_demos):
-            # human = np.loadtxt(open(self.demo_addr + str(i+1) + ".csv"), delimiter=",")
-            # temporal hack to test program
-            robot = np.loadtxt(open('../training/plug/file_output_' + str(i+1)), delimiter=",")
-            # traj = np.hstack((human, robot))
-            data.append(robot)
-
-        return data
 
 
     def sync_trajectory(self):
@@ -369,7 +384,7 @@ class ProMP(object):
         # calculate concatenated covariance matrix for the trajcetory
         # refer to estimate_phase on how to retrive the correct covariance matrix
         new_traj_cov  = self.PHI @ weight_cov @ self.PHI.T 
-        # np.savetxt('../training/trained/traj_cov.csv', new_traj_cov, delimiter=",")
+        # np.savetxt(self.demo_addr+'traj_cov.csv', new_traj_cov, delimiter=",")
 
         return new_traj_mean, new_traj_cov
     
@@ -379,7 +394,7 @@ class ProMP(object):
         """
         pass
     
-    def plot(self, plot_error=False):
+    def plot(self, plot_joint=0, plot_error=False):
         figure1 = plt.figure(1, figsize=(5,5))
         ax = figure1.add_subplot(111)
         ax.set_title("All trajectory")
@@ -389,11 +404,11 @@ class ProMP(object):
         format_traj = self.reshape_trajectory(traj_mean)
 
         # only plot one joint 
-        joint = 0
+        joint = plot_joint
         plot_traj = format_traj[:, joint]
 
         t = np.linspace(0,1,self.n_samples)
-        ax.plot(t, plot_traj, 'o')
+        ax.plot(t, plot_traj)
         if plot_error:
             # we only plot std deviation
             std_full = np.sqrt(traj_cov.diagonal())
@@ -415,7 +430,7 @@ class ProMP(object):
         Parameters:
         ----------
         traj
-            a tuple contains the column trajectory mean and concatenated trajectory
+            a tuple contains the column trajectory mean and concatenated covariance matrix
         joint
             the specific joint trajectory to be plotted
         """
