@@ -1,6 +1,8 @@
 #! /usr/bin/env python
 import rospy
+import rospkg
 import numpy as np
+import sys
 from promp_ros.promp import ProMP
 from geometry_msgs.msg import Pose
 from sensor_msgs.msg import JointState
@@ -10,23 +12,30 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 import message_filters
 import matplotlib.pyplot as plt
 import copy
+from scipy import signal
+from scipy.ndimage import uniform_filter1d
+from scipy.interpolate import CubicSpline
+
 
 class OTPEstimator(object):
     def __init__(self):
         ## Pro-MP
-        self.promp = ProMP(0.1, 20, "", 40)
+        self.dt = 0.0333
 
         ## OTP calculation
         self.otp_d = Pose()
         self.otp_s = Pose()
         self.otp_i = Pose()
         self.phi = 0
-        self.lock = Lock()
+        self.traj_lock = Lock()
+        self.socket_lock = Lock()
 
         ## ROS subscribers
-        kinova_sub = message_filters.Subscriber("/my_gen3/joint_states", JointState)
-        tag_sub = message_filters.Subscriber("/tag_detections", AprilTagDetectionArray)
-        time_sync = message_filters.ApproximateTimeSynchronizer([kinova_sub, tag_sub], 10, slop=0.2)
+        kinova_sub_sync = message_filters.Subscriber("/my_gen3/joint_states", JointState)
+        tag_sub_sync = message_filters.Subscriber("/tag_detections", AprilTagDetectionArray)
+        time_sync = message_filters.ApproximateTimeSynchronizer([kinova_sub_sync, tag_sub_sync], 10, slop=0.2)
+        tag_sub = rospy.Subscriber("/tag_detections", AprilTagDetectionArray, self.socket_pose_cb)
+
         #debug subscriber
         time_sync.registerCallback(self.message_sync_cb)
 
@@ -50,7 +59,10 @@ class OTPEstimator(object):
         """
         Compute static otp
         """
-        pass
+        socket_position = np.empty(3)
+        socket_position[0] = self.sock_pose.position.x
+        socket_position[1] = self.sock_pose.position.y
+        socket_position[2] = self.sock_pose.position.z
 
     def compute_integrate_otp(self):
         """
@@ -70,22 +82,29 @@ class OTPEstimator(object):
         """
         pass
 
-    def robot_joint_state_cb(self, msg):
-        """
-        Read robot joint trajectories from topic
-        The valid publication rate for joint state is about 100hz
-        """
-        with self.lock:
-        # joint position time in millisecond
-            if (len(self.sample_time) == 0):
-                self.init_time = msg.header.stamp
-                t = 0.0
-                self.sample_time.append(t)
+    # def robot_joint_state_cb(self, msg):
+    #     """
+    #     Read robot joint trajectories from topic
+    #     The valid publication rate for joint state is about 100hz
+    #     """
+    #     with self.lock:
+    #     # joint position time in millisecond
+    #         if (len(self.sample_time) == 0):
+    #             self.init_time = msg.header.stamp
+    #             t = 0.0
+    #             self.sample_time.append(t)
+    #         else:
+    #             diff_time = msg.header.stamp - self.init_time
+    #             t = diff_time.secs * 1000 + diff_time.nsecs * 1e-6
+    #             if t - self.sample_time[-1] >= 1:
+    #                 self.sample_time.append(t)
+    
+    def socket_pose_cb(self, msg):
+        with self.socket_lock:
+            if len(msg.detections) > 0:
+                self.sock_pose = msg.detections[0].pose.pose.pose
             else:
-                diff_time = msg.header.stamp - self.init_time
-                t = diff_time.secs * 1000 + diff_time.nsecs * 1e-6
-                if t - self.sample_time[-1] >= 1:
-                    self.sample_time.append(t)
+                rospy.logwarn_throttle(10, "tag not detected")
 
     def diff_time(self, cur_time, init_time):
         """
@@ -99,20 +118,22 @@ class OTPEstimator(object):
         """
         Synchronize robot joint states trajectory and socket pose trajectory
         """
-        if (self.start_record):
+        if (self.start_record and len(socket_msg.detections)>0):
             if (len(self.sample_time) == 0):
                 self.init_time = robot_msg.header.stamp
             robot_time = robot_msg.header.stamp
             socket_time = socket_msg.header.stamp
             # add a small displacement to time
-            t = self.diff_time(robot_time, self.init_time) + 30
+            t = self.diff_time(robot_time, self.init_time)
             self.sample_time.append(t)
             # self.sample_time.append(self.diff_time(socket_time, self.init_time))
 
             # add sampled robot joint to trajectory
             sample_point = JointTrajectoryPoint()
             sample_point.positions = robot_msg.position[0:7]
-            sec = t / 1000
+            sample_point.velocities = robot_msg.velocity[0:7]
+            # sample_point.accelerations = robot_msg.accelerations[0:7]
+            sec = self.dt * len(self.robot_joint_trajectory)
             sample_point.time_from_start = rospy.Duration(secs=sec)
 
             # add socket pose in kinect frame to trajectory
@@ -126,8 +147,16 @@ class OTPEstimator(object):
         Save trajectory data for training
         """
         # convert robot joint trajectory into numpy array
-        joint_array = np.array()
-        np.savetxt('../training/plug/hrc_traj_'+index+'.csv', joint_array, delimiter=",")
+        robot_array = self.list_to_array(self.robot_joint_trajectory, type="robot")
+        socket_array = self.list_to_array(self.socket_trajectory, type="socket")
+        # left: robot array    right: socket array
+        training_array = np.concatenate((robot_array, socket_array), axis=1)
+
+        r = rospkg.RosPack()
+        path = r.get_path('promp_ros')
+        self.data_addr = path+'/training/plug'
+        np.savetxt(self.data_addr+'/hrc_traj_'+str(index)+'.csv', training_array, delimiter=",")
+        rospy.loginfo("Training data saved to "+self.data_addr+'/hrc_traj_'+str(index)+'.csv')
 
     def publish_trajectory(self, traj_list):
         traj_msg = JointTrajectory()
@@ -135,11 +164,18 @@ class OTPEstimator(object):
         for p in traj_list:
             traj_msg.points.append(p)
         self.planned_traj_pub.publish(traj_msg)
+    
+    def publish_target_position(self, traj_list):
+        traj_msg = JointTrajectory()
+        traj_msg.header.stamp = rospy.Time.now()
+        traj_msg.points.append(traj_list[-1])
+        self.planned_traj_pub.publish(traj_msg)
 
-    def record_data(self, time):
+    def record_data(self, duration):
         input("Enter to start recording")
         self.start_record = True
-        rospy.sleep(time)
+        
+        input("Enter again to stop recording")
         self.start_record = False
         rospy.loginfo("Finished recording")
     
@@ -154,14 +190,48 @@ class OTPEstimator(object):
         res_robot_joint_traj = copy.deepcopy(traj[0:l:step])
         return res_robot_joint_traj
     
-    def list_to_array(self):
-        # socket_pose = np.zeros((1,3))
-        # socket_pose[0] = socket_msg.detections.pose.pose.pose.position.x
-        # socket_pose[1] = socket_msg.detections.pose.pose.pose.position.y
-        # socket_pose[2] = socket_msg.detections.pose.pose.pose.position.z
-        pass
+    def list_to_array(self, traj_list, type):
+        """
+        Convert robot joint or socket pose trajectory list to numpy array
+        """
+        if type == "socket":
+            traj_array = np.empty((len(traj_list), 3))
+            for ind, pose in enumerate(traj_list):
+                socket_pose = np.zeros(3)
+                socket_pose[0] = pose.position.x
+                socket_pose[1] = pose.position.y
+                socket_pose[2] = pose.position.z
+                traj_array[ind] = socket_pose
+        
+        elif type == "robot":
+            # save both positions and velocities
+            robot_dof = len(traj_list[0].positions)
+            traj_array = np.empty((len(traj_list), robot_dof*2))
+            for ind, point in enumerate(traj_list):
+                traj_array[ind] = np.concatenate((np.array(point.positions),np.array(point.velocities)))
 
-    ############################DEBUG FUNCTIONS############################3
+        
+        else:
+            rospy.logerr("Unsupported trajectory type")
+            return None
+
+        return traj_array
+
+    def train_promp(self):
+        self.promp = ProMP(self.dt, n_basis=20, demo_addr=self.data_addr+'/hrc_traj', n_demos=40)
+
+    ############################TEST FUNCTIONS############################3
+    def test_conversion(self, traj=None):
+        if traj is None:
+            socket_array = self.list_to_array(self.socket_trajectory, type="socket")
+            print(f"socket array ({socket_array.shape[0]}): \n{socket_array}")
+            robot_array = self.list_to_array(self.robot_joint_trajectory, type="robot")
+            print(f"robot array ({robot_array.shape[0]}):\n{robot_array}")
+        else:
+            robot_array = self.list_to_array(traj, type="robot")
+            print(f"robot array ({robot_array.shape[0]}):\n{robot_array}")
+            
+
     
     def plot_traj(self, joint_trajectory, index=1):
         fig = plt.figure(index, figsize=(10,20))
@@ -182,12 +252,19 @@ class OTPEstimator(object):
         for point in joint_trajectory.points:
             y.append(point.velocities)
         y = np.array(y)
+        # filter the velocities
+        # filtered_v = uniform_filter1d(y, axis=0, size=3)
         for joint in range(y.shape[1]):
            ax2.plot(t, y[:,joint], label=f"joint{joint}")
         ax2.set_title("Velocity")
         plt.legend(loc="upper left")
 
+        ## acceleration
         ax3 = fig.add_subplot(313)
+        # next_filtered_v = filtered_v[1:,:]
+        # next_filtered_v = np.vstack((next_filtered_v, next_filtered_v[-1,:]))
+        
+        # diff = next_filtered_v - filtered_v
         y = []
         for point in joint_trajectory.points:
             y.append(point.accelerations)
@@ -197,22 +274,54 @@ class OTPEstimator(object):
         ax3.set_title("Acceleration")
         plt.legend(loc="upper left")
         
+        # self.plot_interp_traj(joint_trajectory)
+    
+    def plot_interp_traj(self, joint_trajectory):
+        fig = plt.figure(2, figsize=(10,20))
+        t = np.arange(len(joint_trajectory))
+        interp_t = np.linspace(0, t[-1], int(t[-1]/30*1000))
+
+        # position
+        ax1 = fig.add_subplot(311)
+        y = []
+        for point in joint_trajectory:
+            y.append(point.positions)
+        y = np.array(y)
+        interp_y = np.empty((len(interp_t), y.shape[1]))
+        for d in range(y.shape[1]):
+            cs1 = CubicSpline(t, y[:,d])
+            interp_y[:,d] = cs1(interp_t)
+        for joint in range(interp_y.shape[1]):
+           ax1.plot(interp_t, interp_y[:,joint], label=f"joint{joint}")
+        ax1.set_title("Interpolated Position")
+        plt.legend(loc="upper left")
+
+        ax2 = fig.add_subplot(312)
+        ax3 = fig.add_subplot(313)
+        
 if __name__ == "__main__":
     rospy.init_node("otp_estimator", log_level=rospy.INFO)
     
     opte = OTPEstimator()
 
-    # rospy.Timer(rospy.Duration(0.001), lambda timer_event: print(opte.sample_time[-1]))
-    # opte.data_filter(20)
-    opte.record_data(2)
+    ##### record data in time secs
+    opte.record_data(duration=3)
     # opte.plot_traj(opte.robot_joint_trajectory)
+
+    ##### print numpy array format data
+    # opte.test_conversion()
 
     resampled_traj = opte.trajectory_resampler(opte.robot_joint_trajectory, 10)
     opte.publish_trajectory(resampled_traj)
+    # opte.publish_target_position(opte.robot_joint_trajectory)
+    # opte.test_conversion(resampled_traj)
 
-    # msg = rospy.wait_for_message("/smoothed_trajectory", JointTrajectory)
-    # opte.plot_traj(msg, 1)
-    # plt.show()
+    # if (len(sys.argv) < 2):
+    #     raise SyntaxError("Insufficient arguments")
+    # opte.save_training_data(int(sys.argv[1]))
+    msg = rospy.wait_for_message("/smoothed_trajectory", JointTrajectory)
+    opte.plot_traj(msg, 1)
+    plt.show()
 
     rospy.spin()
 
