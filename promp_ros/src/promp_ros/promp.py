@@ -30,6 +30,7 @@ class ProMP(object):
         self.viapoints = []
         self.obs_sigma = 1e-2
         self.basis_sigma = self.dt * 5
+        self.fix_length = True
 
     def main(self):
         """
@@ -44,7 +45,12 @@ class ProMP(object):
         # self.demos = self.add_demonstration()
 
         # synchronize phase of demonstration trajectories
-        self.sync_demos, self.ref_len, self.alpha, self.alpha_mean, self.alpha_std = self.sync_trajectory()
+        if (not self.fix_length):
+            self.sync_demos, self.ref_len, self.alpha, self.alpha_mean, self.alpha_std = self.sync_trajectory()
+        else:
+            self.sync_demos = self.demos
+            self.ref_len = self.demos[0].shape[0]
+            self.alpha_mean = 1.0
         # start diverging
         # print(self.sync_demos[2])
         # obtain necessary information from synced demonstrations
@@ -77,6 +83,7 @@ class ProMP(object):
         Import demonstrations from files
         """
         data = []
+        ref_len = 0
         for i in range(0, self.n_demos):
             # human = np.loadtxt(open(self.demo_addr + str(i+1) + ".csv"), delimiter=",")
             # temporal hack to test program
@@ -87,7 +94,11 @@ class ProMP(object):
                 rospy.logwarn(f"{addr} is not found")
                 continue
             # traj = np.hstack((human, robot))
+            if (ref_len == 0):
+                ref_len = training_data.shape[0]
             if cols is not None:
+                if self.fix_length and training_data.shape[0] != ref_len:
+                    raise ValueError(f"File {i+1} has data length{training_data.shape[0]}")
                 data.append(training_data[:,cols])
                 # print(data[-1].shape)
             else:
@@ -212,7 +223,7 @@ class ProMP(object):
                 resampled_data[j] = scaled_value
             sync_data.append(resampled_data)
         
-        rospy.logdebug(f"standard data length: {ref_len}")
+        rospy.loginfo(f"standard data length: {ref_len}")
         return sync_data, ref_len, alpha, alpha_mean, alpha_std
 
     def predict(self, obs_traj, phase_estimation=True):
@@ -244,6 +255,10 @@ class ProMP(object):
                 # rospy.logdebug(f"resampled observation: {resampled_obs[:, i]}")
             rospy.loginfo(f"[Phase estimation]: alpha is {alpha}, resampled from {obs_samples} points to {len(refact_t)} points")
             obs_traj = resampled_obs
+        
+        else:
+            alpha = 1.0
+            phase = obs_traj.shape[0] / self.ref_len
         
         # add viapoints from traj
         viapoints = []
@@ -381,7 +396,7 @@ class ProMP(object):
             # retrieve the correct covriance matrix from the concatenated big one
             # x, y = np.mgrid[index:cov.shape[0]:self.n_samples, index:cov.shape[0]:self.n_samples]
             x, y = np.meshgrid(selector, selector)
-            c = cov[selector, selector]
+            c = cov[x, y]
             # c = np.identity(nobs_dof) * self.obs_sigma
 
             # print(f"alpha*t sample: \n {sample}")
@@ -424,7 +439,7 @@ class ProMP(object):
     def plot_mean_trajectory(self, plot_joint=0, plot_error=False):
         figure1 = plt.figure(1, figsize=(5,5))
         ax = figure1.add_subplot(111)
-        ax.set_title("Mean trajectory")
+        ax.set_title(f"Mean trajectory joint {plot_joint}")
         traj_mean, traj_cov = self.compute_trajectory_stat(self.weights['mean'], self.weights['cov'])
 
         # reshape trajectory for plotting
