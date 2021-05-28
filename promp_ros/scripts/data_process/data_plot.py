@@ -116,10 +116,6 @@ def plot_force():
     plt.show()
 
 if __name__ == "__main__":
-    # plot_comparison("Arrival Position Error (m)", 0.02)
-    # plot_comparison("Arrival Orientation Error (rad)", 0.03)
-    # plot_comparison("Navigation Time (s)", 15)
-    # plot_comparison("Total Commands", 2.5)
     # plot_time()
     plot_force()
     pass
