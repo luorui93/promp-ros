@@ -22,7 +22,7 @@ insertion_p = df[df['Insertion']=='Passive']
 insertion_a = df[df['Insertion']=='Active']
 
 
-def plot_result():
+def plot_time():
     box_w = 0.5
     figure = plt.figure(1, figsize=(8, 5))
     ## color
@@ -38,7 +38,7 @@ def plot_result():
     print(pv)
     y = 1.01*max(max(d1), max(d2))
     ## specify decimals in scientific notation
-    text = f"p={pv:.2e}"
+    text = f"p={pv:.2e}(**)"
     ## space between line and box
     h = 0.1
     plt.plot([0, 0, 1, 1],[y, y+h, y+h, y], lw=1.5, c=col)
@@ -52,7 +52,7 @@ def plot_result():
     fv, pv = stats.f_oneway(d1, d2)
     print(pv)
     y = 1.01*max(max(d1), max(d2))
-    text = f"p={pv:.2e}"
+    text = f"p={pv:.2e}(**)"
     ## space between line and box
     h = 0.1
     plt.plot([0, 0, 1, 1],[y, y+h, y+h, y], lw=1.5, c=col)
@@ -66,7 +66,7 @@ def plot_result():
     fv, pv = stats.f_oneway(d1, d2)
     print(pv)
     y = 1.01*max(max(d1), max(d2))
-    text = f"p={pv:.2e}"
+    text = f"p={pv:.2e}(**)"
     ## space between line and box
     h = 0.1
     plt.plot([0, 0, 1, 1],[y, y+h, y+h, y], lw=1.5, c=col)
@@ -77,14 +77,51 @@ def plot_result():
     plt.show()
     
 
+def plot_force():
+    box_w = 0.5
+    df_force = pd.read_csv(data_path+"/data/force.csv")
+    figure = plt.figure(figsize=(5,5))
+    ax = figure.add_subplot(111)
+    d1 = df_force[(df_force['Sex']=='Male') & (df_force['Direction']=='x')]['Directional Force (N)']
+    d2 = df_force[(df_force['Sex']=='Female') & (df_force['Direction']=='x')]['Directional Force (N)']
+    _, p1 = stats.f_oneway(d1, d2)
+    ym1 = 1.03*max(max(d1), max(d2))
+    d1 = df_force[(df_force['Sex']=='Male') & (df_force['Direction']=='y')]['Directional Force (N)']
+    d2 = df_force[(df_force['Sex']=='Female') & (df_force['Direction']=='y')]['Directional Force (N)']
+    _, p2 = stats.f_oneway(d1, d2)
+    ym2 = 1.03*max(max(d1), max(d2))
+    d1 = df_force[(df_force['Sex']=='Male') & (df_force['Direction']=='z')]['Directional Force (N)']
+    d2 = df_force[(df_force['Sex']=='Female') & (df_force['Direction']=='z')]['Directional Force (N)']
+    _, p3 = stats.f_oneway(d1, d2)
+    ym3 = 1.03*max(max(d1), max(d2))
+    sns.boxplot(x='Direction', y='Directional Force (N)', hue='Sex', data=df_force, width=box_w, ax=ax)
+
+    p = [p1, p2, p3]
+    y = [ym1, ym2, ym3]
+    x_center = [0-box_w/4, 0+box_w/4, 1-box_w/4, 1+box_w/4, 2-box_w/4, 2+box_w/4]
+    col = 'k'
+    for i in range(3):
+        if p[i] < 0.05:
+            text = f"p={p[i]:.2e}(*)"
+        else:
+            text = f"p={p[i]:.2e}"
+        x1 = x_center[2*i]
+        x2 = x_center[2*i+1]
+        h = 0.1
+        plt.plot([x1,x1,x2,x2],[y[i], y[i]+h, y[i]+h, y[i]], lw=1.5, c=col)
+        plt.text(i, y[i]+h, text, ha="center", va="bottom", color=col)
+
+
+    plt.tight_layout()
+    plt.show()
+
 if __name__ == "__main__":
     # plot_comparison("Arrival Position Error (m)", 0.02)
     # plot_comparison("Arrival Orientation Error (rad)", 0.03)
     # plot_comparison("Navigation Time (s)", 15)
     # plot_comparison("Total Commands", 2.5)
-    anova_analysis()
-    plot_result()
+    # plot_time()
+    plot_force()
     pass
-
 
 
