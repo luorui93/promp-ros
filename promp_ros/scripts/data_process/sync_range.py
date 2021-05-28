@@ -6,8 +6,12 @@ This script is only used for data without syncing joint angles representation ra
 
 import numpy as np
 import glob
+import rospkg
 
-file_list = glob.glob("../plug/fix_time_front_back/*.csv")
+r = rospkg.RosPack()
+path = r.get_path('promp_ros')
+
+file_list = glob.glob(path+"/training/plug/fix_time_front_back/*.csv")
 print (file_list)
 
 for file in file_list:
