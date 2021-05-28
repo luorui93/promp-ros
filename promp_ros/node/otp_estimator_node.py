@@ -15,6 +15,7 @@ import copy
 from scipy import signal
 from scipy.ndimage import uniform_filter1d
 from scipy.interpolate import CubicSpline, splrep, splev
+import os
 
 
 class OTPEstimator(object):
@@ -54,6 +55,9 @@ class OTPEstimator(object):
         # each element of socket trajectory is a geometry_msgs/Pose 
         self.socket_trajectory = []
         self.res_socket_traj = []
+
+        # real time socket traj
+        self.real_socket_traj = []
         self.sample_time = []
 
     def compute_static_otp(self):
@@ -77,11 +81,51 @@ class OTPEstimator(object):
         """
         pass
 
-    def query_dynamic_otp(self):
+    def query_dynamic_mean_otp(self):
         """
-        Query the current dynamic otp from ProMP
+        Query the current dynamic mean otp from ProMP
         """
-        pass
+        mean = self.promp.weights['mean']
+        cov = self.promp.weights['cov']
+        traj_mean, traj_cov = self.promp.compute_trajectory_stat(mean, cov)
+        format_traj = self.promp.reshape_trajectory(traj_mean)
+
+        last_point = format_traj[-1,0:7]
+        otp = JointTrajectoryPoint()
+        otp.positions = last_point
+
+        return otp
+    
+    def query_dynamic_otp(self, socket_traj=None):
+        """
+        Query the dynamic OTP given partial socket pose trajectory
+        """
+        # use trajectory file
+        if socket_traj is None:
+            test_traj = np.loadtxt(open(self.data_addr+"32.csv"), delimiter=",")
+            human_traj = test_traj[0:100, [14, 15, 16]]
+        else:
+            human_traj = socket_traj
+        # we need to pad the partial trajectory as the same standard format, fill unknown value with np.nan
+        # here the robot trajectory is unknown
+        nan_traj = np.empty((human_traj.shape[0], 7))
+        nan_traj[:] = np.nan
+        padded_traj = np.hstack((nan_traj, human_traj))
+        # alpha, phase = self.promp.estimate_phase(padded_traj)
+        # print(f"estimated alpha: {alpha}, pahse: {phase}")
+
+        # return the updated trajectory mean and cov
+        traj_stat, phase = self.promp.predict(padded_traj, phase_estimation=False)
+        # self.promp.plot_trajectory(traj_stat, 1, title="joint 1", plot_error=True)
+
+        format_traj = self.promp.reshape_trajectory(traj_stat[0])
+
+        last_point = format_traj[-1,0:7]
+        otp = JointTrajectoryPoint()
+        otp.positions = last_point
+
+        return otp
+        
 
     # def robot_joint_state_cb(self, msg):
     #     """
@@ -104,6 +148,11 @@ class OTPEstimator(object):
         with self.socket_lock:
             if len(msg.detections) > 0:
                 self.sock_pose = msg.detections[0].pose.pose.pose
+                pose = []
+                pose.append(self.sock_pose.position.x)
+                pose.append(self.sock_pose.position.y)
+                pose.append(self.sock_pose.position.z)
+                self.real_socket_traj.append(pose)
             else:
                 rospy.logwarn_throttle(10, "tag not detected")
 
@@ -131,6 +180,7 @@ class OTPEstimator(object):
 
             # add sampled robot joint to trajectory
             sample_point = JointTrajectoryPoint()
+            # sync representation range of joint angles 
             sample_point.positions = robot_msg.position[0:7]
             sample_point.velocities = robot_msg.velocity[0:7]
             # sample_point.accelerations = robot_msg.accelerations[0:7]
@@ -148,13 +198,17 @@ class OTPEstimator(object):
         Save trajectory data for training
         """
         # convert robot joint trajectory into numpy array
+        assert(len(self.robot_joint_trajectory) > 0), "robot trajectory empty"
+        assert(len(self.socket_trajectory) > 0), "socket trajectory empty"
+        assert(len(self.robot_joint_trajectory) == len(self.socket_trajectory)), "socket and robot trajectory must be at the same length"
+
         robot_array = self.list_to_array(self.robot_joint_trajectory, type="robot")
         socket_array = self.list_to_array(self.socket_trajectory, type="socket")
         # left: robot array    right: socket array
         training_array = np.concatenate((robot_array, socket_array), axis=1)
 
         np.savetxt(self.data_addr+str(index)+'.csv', training_array, delimiter=",")
-        rospy.loginfo("Training data saved to "+self.data_addr+'/hrc_traj_'+str(index)+'.csv')
+        rospy.loginfo("Training data saved to "+self.data_addr+str(index)+'.csv')
 
     def publish_trajectory(self, traj_list):
         traj_msg = JointTrajectory()
@@ -169,11 +223,14 @@ class OTPEstimator(object):
         traj_msg.points.append(traj_list[-1])
         self.planned_traj_pub.publish(traj_msg)
 
-    def record_data(self, duration):
+    def record_data(self, duration=None):
         input("Enter to start recording")
         self.start_record = True
         
-        input("Enter again to stop recording")
+        if (duration is None):
+            input("Enter again to stop recording")
+        else:
+            rospy.sleep(duration)
         self.start_record = False
         rospy.loginfo("Finished recording")
     
@@ -200,17 +257,16 @@ class OTPEstimator(object):
         interp_pos = np.empty((len(dense_t), interp_traj.shape[1]))
         interp_vel = np.empty(interp_pos.shape)
         interp_acc = np.empty(interp_pos.shape)
-        if spline_order == 3:
-            for d in range(interp_traj.shape[1]):
-                # b-spline interpolation
-                bs = splrep(t, interp_traj[:,d], k=3)
-                interp_pos[:,d] = splev(dense_t, bs, 0)
-                interp_vel[:,d] = splev(dense_t, bs, 1)
-                interp_acc[:,d] = splev(dense_t, bs, 2)
-            # cs = CubicSpline(t, interp_traj, axis=0)
-            # interp_pos = cs(dense_t, 0)
-            # interp_vel = cs(dense_t, 1)
-            # interp_acc = cs(dense_t, 2)
+        for d in range(interp_traj.shape[1]):
+            # b-spline interpolation
+            bs = splrep(t, interp_traj[:,d], k=spline_order)
+            interp_pos[:,d] = splev(dense_t, bs, 0)
+            interp_vel[:,d] = splev(dense_t, bs, 1)
+            interp_acc[:,d] = splev(dense_t, bs, 2)
+        # cs = CubicSpline(t, interp_traj, axis=0)
+        # interp_pos = cs(dense_t, 0)
+        # interp_vel = cs(dense_t, 1)
+        # interp_acc = cs(dense_t, 2)
 
         self.plot_interp_traj(dense_t, interp_pos, interp_vel, interp_acc)
 
@@ -255,7 +311,23 @@ class OTPEstimator(object):
         else:
             robot_array = self.list_to_array(traj, type="robot")
             print(f"robot array ({robot_array.shape[0]}):\n{robot_array}")
-            
+    
+    def test_otp(self):
+        r = rospy.Rate(30)
+        while (not rospy.is_shutdown()):
+            try:
+                print(self.real_socket_traj[-1][1])
+                if len(self.real_socket_traj) == 150:
+                    obs_socket_traj = np.array(self.real_socket_traj)
+                    updated_otp = opte.query_dynamic_otp(obs_socket_traj)
+                    print("target position:\n", updated_otp.positions)
+                    opte.publish_target_position([updated_otp])
+                    alarm()
+                    break
+
+            except rospy.ROSInterruptException:
+                break
+            r.sleep()
 
     
     def plot_traj(self, joint_trajectory, index=1):
@@ -312,48 +384,61 @@ class OTPEstimator(object):
         ax3 = fig.add_subplot(313)
         ax3.plot(t, acc)
         ax3.set_title("Acceleration")
+
+def alarm():
+    duration = 0.5 # seconds
+    freq = 440  # Hz
+    os.system('play -nq -t alsa synth {} sine {}'.format(duration, freq))
         
 if __name__ == "__main__":
     rospy.init_node("otp_estimator", log_level=rospy.INFO)
 
     r = rospkg.RosPack()
     path = r.get_path('promp_ros')
-    opte = OTPEstimator(path+'/training/plug/hrc_traj_')
+    opte = OTPEstimator(path+'/training/plug/mixed/hrc_traj_')
 
-    ##### record data in time secs
-    # opte.record_data(duration=3)
-    # opte.plot_traj(opte.robot_joint_trajectory)
-
-    ##### print numpy array format data
-    # opte.test_conversion()
-    # opte.interpolate_traj(opte.robot_joint_trajectory, 3)
-
-    # resampled_traj = opte.trajectory_resampler(opte.robot_joint_trajectory, 10)
-    # opte.publish_trajectory(resampled_traj)
-    # opte.publish_target_position(opte.robot_joint_trajectory)
-    # opte.test_conversion(resampled_traj)
-
+    ##### record training data
+    # opte.record_data(5)
     # if (len(sys.argv) < 2):
     #     raise SyntaxError("Insufficient arguments")
     # opte.save_training_data(int(sys.argv[1]))
+    # alarm()
+
+    ##### print numpy array format data
+    # opte.test_conversion()
+    # opte.interpolate_traj(opte.robot_joint_trajectory, 4)
+
+    # resampled_traj = opte.trajectory_resampler(opte.robot_joint_trajectory, 10)
+    # opte.publish_trajectory(resampled_traj)
+    # opte.test_conversion(resampled_traj)
+
     # msg = rospy.wait_for_message("/smoothed_trajectory", JointTrajectory)
     # opte.plot_traj(msg, 1)
-    # plt.show()
 
     ##### train promp
     rospy.loginfo("Start training")
-    opte.train_promp(20, 20, 7)
+    opte.train_promp(n_basis=20, n_demos=35, n_dof=10)
     opte.promp.main()
     rospy.loginfo("Training completed")
-    plot_joint = 0
-    rospy.loginfo(f"plot joint {plot_joint}")
-    opte.promp.plot(plot_joint=plot_joint, plot_error=True)
-    # mean, _ = pmp.compute_trajectory_stat(pmp.weights['mean'], pmp.weights['cov'])
-    # traj = pmp.reshape_trajectory(mean)
-    # print(f"trained trajectory mean: \n{traj}")
-    # print(f"trained cov: {pmp.weights['cov']}")ning completed")
+# 
+    ##### plot mean trajectory
+    # plot_joint = 0
+    # rospy.loginfo(f"plot joint {plot_joint}")
+    # opte.promp.plot_mean_trajectory(plot_joint=plot_joint, plot_error=True)
+    # target_point = opte.query_dynamic_mean_otp()
+    # print("target position:\n", target_point.positions)
+    # opte.publish_target_position([target_point])
 
-    # rospy.spin()
+    ##### predict new trajectory given partial observation
+    # updated_otp = opte.query_dynamic_otp()
+    # print("target position:\n", updated_otp.positions)
+    # opte.publish_target_position([updated_otp])
+
+    ##### predict new trajectory with real human
+    opte.test_otp()
+   
+    # plt.show()
+    rospy.spin()
 
 
 
