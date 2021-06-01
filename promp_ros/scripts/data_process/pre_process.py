@@ -1,4 +1,5 @@
 #! /usr/bin/env python
+from os import sync
 import numpy as np
 import glob
 import rospkg
@@ -13,7 +14,7 @@ def sync_range():
     """
     Sync joint angels from -pi ~ pi to 0 ~ 2*pi
     """
-    file_list = glob.glob(path+"/training/plug/fix_time_front_back/*.csv")
+    file_list = glob.glob(path+"/training/plug/mixed/90_samples/*.csv")
     print (file_list)
 
     for file in file_list:
@@ -48,7 +49,8 @@ def resample_data(duration = 3):
             np.savetxt(new_file, resampled_data, delimiter=",")
             print(f"Saved to {new_file}")
 
-resample_data()
+# resample_data()
+sync_range()
 
 
 
