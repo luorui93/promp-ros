@@ -9,14 +9,19 @@ from sensor_msgs.msg import JointState
 from multiprocessing import Lock
 from apriltag_ros.msg import AprilTagDetectionArray, AprilTagDetection
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from moveit_msgs.msg import RobotTrajectory
 import message_filters
 import matplotlib.pyplot as plt
 import copy
 from scipy import signal
-from scipy.ndimage import uniform_filter1d
 from scipy.interpolate import CubicSpline, splrep, splev
 import os
+import tf2_ros
 
+def alarm():
+    duration = 0.5 # seconds
+    freq = 440  # Hz
+    os.system('play -nq -t alsa synth {} sine {}'.format(duration, freq))
 
 class OTPEstimator(object):
     def __init__(self, data_addr):
@@ -25,12 +30,11 @@ class OTPEstimator(object):
         self.data_addr = data_addr
 
         ## OTP calculation
-        self.otp_d = Pose()
-        self.otp_s = Pose()
-        self.otp_i = Pose()
         self.phi = 0
         self.traj_lock = Lock()
         self.socket_lock = Lock()
+        self.start_timer = False
+        self.start_record = False
 
         ## ROS subscribers
         kinova_sub_sync = message_filters.Subscriber("/my_gen3/joint_states", JointState)
@@ -43,6 +47,7 @@ class OTPEstimator(object):
 
         ## ROS publishers
         self.planned_traj_pub = rospy.Publisher('/planned_trajectory', JointTrajectory, queue_size=1, latch=True)
+        self.robot_traj_pub = rospy.Publisher('/robot_trajectory', RobotTrajectory, queue_size=1, latch=True)
 
         ## trajectories
         self.init_time = rospy.Time.now()
@@ -64,16 +69,22 @@ class OTPEstimator(object):
         """
         Compute static otp
         """
-        socket_position = np.empty(3)
-        socket_position[0] = self.sock_pose.position.x
-        socket_position[1] = self.sock_pose.position.y
-        socket_position[2] = self.sock_pose.position.z
+        # socket_position = np.empty(3)
+        # socket_position[0] = self.sock_pose.position.x
+        # socket_position[1] = self.sock_pose.position.y
+        # socket_position[2] = self.sock_pose.position.z
+        otp_s = np.array([5.8413, 5.9208, 3.1209, 4.4577, 0.0883, 5.3299, 1.1647])
+        return otp_s
 
-    def compute_integrate_otp(self):
+    def compute_integrate_otp(self, phase, otp_d):
         """
         Compute integrated otp with static otp and dynamic otp
         """
-        pass
+        lamb = (phase - 1)**3 + 1
+        otp_s = self.compute_static_otp()
+        otp_i = (1-lamb)*otp_s + lamb*otp_d
+        return otp_i
+        
 
     def query_trajectory(self, otp):
         """
@@ -81,7 +92,7 @@ class OTPEstimator(object):
         """
         pass
 
-    def query_dynamic_mean_otp(self):
+    def query_dynamic_mean_traj(self):
         """
         Query the current dynamic mean otp from ProMP
         """
@@ -90,11 +101,11 @@ class OTPEstimator(object):
         traj_mean, traj_cov = self.promp.compute_trajectory_stat(mean, cov)
         format_traj = self.promp.reshape_trajectory(traj_mean)
 
-        last_point = format_traj[-1,0:7]
-        otp = JointTrajectoryPoint()
-        otp.positions = last_point
+        # last_point = format_traj[-1,0:7]
+        # otp = JointTrajectoryPoint()
+        # otp.positions = last_point
 
-        return otp
+        return format_traj
     
     def query_dynamic_otp(self, socket_traj=None):
         """
@@ -126,35 +137,35 @@ class OTPEstimator(object):
 
         return otp
         
+    def query_dynamic_otp_target(self, query_points, time):
+        assert(query_points.shape[0] == len(time)), "query points length should be the same as time"
+        nan_traj = np.empty((query_points.shape[0], 7))
+        nan_traj[:] = np.nan
+        padded_traj = np.hstack((nan_traj, query_points))
 
-    # def robot_joint_state_cb(self, msg):
-    #     """
-    #     Read robot joint trajectories from topic
-    #     The valid publication rate for joint state is about 100hz
-    #     """
-    #     with self.lock:
-    #     # joint position time in millisecond
-    #         if (len(self.sample_time) == 0):
-    #             self.init_time = msg.header.stamp
-    #             t = 0.0
-    #             self.sample_time.append(t)
-    #         else:
-    #             diff_time = msg.header.stamp - self.init_time
-    #             t = diff_time.secs * 1000 + diff_time.nsecs * 1e-6
-    #             if t - self.sample_time[-1] >= 1:
-    #                 self.sample_time.append(t)
+        traj_stat, phase = self.promp.predict(padded_traj, phase_estimation=False, given_time=time)
+
+        format_traj = self.promp.reshape_trajectory(traj_stat[0])
+
+        last_point = format_traj[-1,0:7]
+        otp = JointTrajectoryPoint()
+        otp.positions = last_point
+
+        return otp
+    
     
     def socket_pose_cb(self, msg):
-        with self.socket_lock:
-            if len(msg.detections) > 0:
-                self.sock_pose = msg.detections[0].pose.pose.pose
-                pose = []
-                pose.append(self.sock_pose.position.x)
-                pose.append(self.sock_pose.position.y)
-                pose.append(self.sock_pose.position.z)
-                self.real_socket_traj.append(pose)
-            else:
-                rospy.logwarn_throttle(10, "tag not detected")
+        if (self.start_timer):
+            with self.socket_lock:
+                if len(msg.detections) > 0:
+                    self.sock_pose = msg.detections[0].pose.pose.pose
+                    pose = []
+                    pose.append(self.sock_pose.position.x)
+                    pose.append(self.sock_pose.position.y)
+                    pose.append(self.sock_pose.position.z)
+                    self.real_socket_traj.append(pose)
+                else:
+                    rospy.logwarn_throttle(10, "tag not detected")
 
     def diff_time(self, cur_time, init_time):
         """
@@ -210,11 +221,19 @@ class OTPEstimator(object):
         np.savetxt(self.data_addr+str(index)+'.csv', training_array, delimiter=",")
         rospy.loginfo("Training data saved to "+self.data_addr+str(index)+'.csv')
 
-    def publish_trajectory(self, traj_list):
+    def publish_trajectory(self, traj_array):
         traj_msg = JointTrajectory()
         traj_msg.header.stamp = rospy.Time.now()
-        for p in traj_list:
-            traj_msg.points.append(p)
+        time = 0.0
+        dt = 5.0 / traj_array.shape[0]
+        # we need to convert back to the joint states value range
+        for p in traj_array:
+            time += dt
+            s1 = p > np.pi
+            s2 = p <= 2*np.pi
+            selector = np.logical_and(s1, s2)
+            p[selector] = p[selector] - 2*np.pi
+            traj_msg.points.append(JointTrajectoryPoint(positions=list(p), time_from_start=rospy.Duration(time)))
         self.planned_traj_pub.publish(traj_msg)
     
     def publish_target_position(self, traj_list):
@@ -234,41 +253,101 @@ class OTPEstimator(object):
         self.start_record = False
         rospy.loginfo("Finished recording")
     
-    def trajectory_resampler(self, traj, f):
+    def trajectory_resampler(self, traj, f=None, duration=None):
         """
-        Sample trajectory at a given frequency
+        Sample trajectory at a given frequency or duration
         """
         ## the default frequency of sampling data is about 30hz
-        assert(f <= 30), "the resampled frequency should be less than 30hz"
-        l = len(traj)
-        step = 30 // f
-        res_robot_joint_traj = copy.deepcopy(traj[0:l:step])
-        return res_robot_joint_traj
-    
-    def interpolate_traj(self, traj, spline_order=3):
-        interp_traj = []
-        for point in traj:
-            interp_traj.append(point.positions)
-        interp_traj = np.array(interp_traj)
+        ## resample the trajectory with different collection frequency (same duration)
+        if f is not None:
+            assert(f <= 30), "the resampled frequency should be less than 30hz"
+            l = traj.shape[0]
+            step = 30 // f
+            selector = [i for i in range(0, l, step)]
+            res_robot_joint_traj_array = traj[selector, :]
+            return res_robot_joint_traj_array
 
-        # interpolate trajectory using a cubice spline
-        t = self.dt * np.arange(interp_traj.shape[0])
-        dense_t = np.linspace(0, t[-1], 1000)
-        interp_pos = np.empty((len(dense_t), interp_traj.shape[1]))
+        ## resample the trajectory with different duration (same frequency)
+        elif duration is not None:
+            pass
+        else:
+            rospy.logerr("Unsupported resampling method")
+            raise ValueError()
+
+    
+    def interpolate_traj(self, traj_msg, spline_order=3):
+        """
+        Interpolate a trajectory_msgs/JointTrajectory trajectory
+        """
+        jt = traj_msg.points
+        assert (len(jt) != 0), "trajectory message is empty"
+        sparse_pos = []
+        sparse_vel = []
+        sparse_acc = []
+        sparse_time = []
+        for jtp in jt:
+            sparse_pos.append(jtp.positions)
+            sparse_vel.append(jtp.velocities)
+            sparse_acc.append(jtp.accelerations)
+            sparse_time.append(jtp.time_from_start.to_sec())
+        
+        dof = len(sparse_pos[0])
+        dense_time = np.arange(0, sparse_time[-1], 0.001)
+        interp_pos = np.empty((len(dense_time), dof))
         interp_vel = np.empty(interp_pos.shape)
         interp_acc = np.empty(interp_pos.shape)
-        for d in range(interp_traj.shape[1]):
-            # b-spline interpolation
-            bs = splrep(t, interp_traj[:,d], k=spline_order)
-            interp_pos[:,d] = splev(dense_t, bs, 0)
-            interp_vel[:,d] = splev(dense_t, bs, 1)
-            interp_acc[:,d] = splev(dense_t, bs, 2)
+        for d in range(dof):
+            bs_p = splrep(np.array(sparse_time), np.array(sparse_pos)[:,d], k=1)
+            interp_pos[:, d] = splev(dense_time, bs_p, 0)
+            bs_v = splrep(np.array(sparse_time), np.array(sparse_vel)[:,d], k=2)
+            interp_vel[:, d] = splev(dense_time, bs_v, 0)
+            bs_a = splrep(np.array(sparse_time), np.array(sparse_acc)[:,d], k=3)
+            interp_acc[:, d] = splev(dense_time, bs_a, 0)
+            
+        # interp_traj = []
+        # for point in traj:
+        #     interp_traj.append(point.positions)
+        # interp_traj = np.array(interp_traj)
+
+        # # interpolate trajectory using a cubice spline
+        # t = self.dt * np.arange(interp_traj.shape[0])
+        # dense_t = np.linspace(0, t[-1], 1000)
+        # interp_pos = np.empty((len(dense_t), interp_traj.shape[1]))
+        # interp_vel = np.empty(interp_pos.shape)
+        # interp_acc = np.empty(interp_pos.shape)
+        # for d in range(interp_traj.shape[1]):
+        #     # b-spline interpolation
+        #     bs = splrep(t, interp_traj[:,d], k=spline_order)
+        #     interp_pos[:,d] = splev(dense_t, bs, 0)
+        #     interp_vel[:,d] = splev(dense_t, bs, 1)
+        #     interp_acc[:,d] = splev(dense_t, bs, 2)
         # cs = CubicSpline(t, interp_traj, axis=0)
         # interp_pos = cs(dense_t, 0)
         # interp_vel = cs(dense_t, 1)
         # interp_acc = cs(dense_t, 2)
+        
+        rospy.loginfo(f"Successfully interpolated {interp_pos.shape[0]} points")
+        self.plot_interp_traj(dense_time, interp_pos, interp_vel, interp_acc)
+        return self.convert_to_traj_msg(dense_time, interp_pos, interp_vel, interp_acc)
 
-        self.plot_interp_traj(dense_t, interp_pos, interp_vel, interp_acc)
+    def convert_to_traj_msg(self, dense_time, interp_pos, interp_vel, interp_acc):
+        """
+        Convert interpolated trajectory array to RobotTrajectory message
+        """
+        traj_msg = RobotTrajectory()
+        assert(len(dense_time) == interp_pos.shape[0]), "Time and trajectory length not equal"
+        steps = dense_time.shape[0]
+        for i in range(steps):
+            jtp = JointTrajectoryPoint(
+                positions=list(interp_pos[i,:]),
+                velocities=list(interp_vel[i,:]),
+                accelerations=list(interp_acc[i,:]),
+                time_from_start=rospy.Duration(dense_time[i])
+            )
+            traj_msg.joint_trajectory.points.append(jtp)
+            traj_msg.joint_trajectory.joint_names = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6', 'joint_7']
+        
+        return traj_msg
 
     
     def list_to_array(self, traj_list, type):
@@ -311,23 +390,96 @@ class OTPEstimator(object):
         else:
             robot_array = self.list_to_array(traj, type="robot")
             print(f"robot array ({robot_array.shape[0]}):\n{robot_array}")
-    
+
+    def test_target(self):
+        r = rospy.Rate(30)
+        input("Enter to start experiment")
+        self.start_timer = True
+        start_time = rospy.Time.now()
+        input("Enter to send target")
+        while (not rospy.is_shutdown()):
+            samples = 75
+            phase = samples/150
+            if len(self.real_socket_traj) > 0:
+                given_time = [samples-1]
+                obs_socket_traj = np.array([self.real_socket_traj[-1]])
+                updated_otp = self.query_dynamic_otp_target(obs_socket_traj, given_time)
+                otp_d = np.array(updated_otp.positions)
+                otp_i = self.compute_integrate_otp(phase, otp_d)
+                updated_otp.positions = list(otp_i)
+                print("target position:\n", updated_otp.positions)
+                print(f"Phase: {phase}")
+                self.publish_target_position([updated_otp])
+                alarm()
+                break
+            r.sleep()
+
+        input("Enter to save time")
+        end_time = rospy.Time.now()
+        exp_time = (end_time - start_time).to_sec()
+
+        input("Enter to calculate pose error")
+        tfBuffer = tf2_ros.Buffer()
+        listener = tf2_ros.TransformListener(tfBuffer)
+        received_tf = False
+        while not received_tf:
+            try:
+                trans = tfBuffer.lookup_transform("socket_updated_pre", 'cable_tip', rospy.Time())
+                received_tf = True
+            except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
+                r.sleep()
+                continue
+
+        pos = (trans.transform.translation.x, trans.transform.translation.y, trans.transform.translation.z)
+
+        return exp_time, pos
+
     def test_otp(self):
         r = rospy.Rate(30)
+        input("Enter to start experiment")
+        self.start_timer = True
+        start_time = rospy.Time.now()
         while (not rospy.is_shutdown()):
             try:
-                print(self.real_socket_traj[-1][1])
-                if len(self.real_socket_traj) == 150:
+                # print(self.real_socket_traj[-1][1])
+                samples = 150
+                phase = samples / 150
+                if len(self.real_socket_traj) == samples:
                     obs_socket_traj = np.array(self.real_socket_traj)
-                    updated_otp = opte.query_dynamic_otp(obs_socket_traj)
+                    updated_otp = self.query_dynamic_otp(obs_socket_traj)
+                    otp_d = np.array(updated_otp.positions)
+                    otp_i = self.compute_integrate_otp(phase, otp_d)
+                    updated_otp.positions = list(otp_i)
                     print("target position:\n", updated_otp.positions)
-                    opte.publish_target_position([updated_otp])
+                    print(f"Phase: {phase}")
+                    self.publish_target_position([updated_otp])
                     alarm()
                     break
 
             except rospy.ROSInterruptException:
                 break
             r.sleep()
+        
+        input("Enter to save time")
+        end_time = rospy.Time.now()
+        exp_time = (end_time - start_time).to_sec()
+
+        input("Enter to calculate pose error")
+        tfBuffer = tf2_ros.Buffer()
+        listener = tf2_ros.TransformListener(tfBuffer)
+        received_tf = False
+        r = rospy.Rate(30)
+        while not received_tf:
+            try:
+                trans = tfBuffer.lookup_transform("socket_updated_pre", 'cable_tip', rospy.Time())
+                received_tf = True
+            except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
+                r.sleep()
+                continue
+
+        pos = (trans.transform.translation.x, trans.transform.translation.y, trans.transform.translation.z)
+
+        return exp_time, pos
 
     
     def plot_traj(self, joint_trajectory, index=1):
@@ -385,11 +537,7 @@ class OTPEstimator(object):
         ax3.plot(t, acc)
         ax3.set_title("Acceleration")
 
-def alarm():
-    duration = 0.5 # seconds
-    freq = 440  # Hz
-    os.system('play -nq -t alsa synth {} sine {}'.format(duration, freq))
-        
+
 if __name__ == "__main__":
     rospy.init_node("otp_estimator", log_level=rospy.INFO)
 
@@ -398,11 +546,17 @@ if __name__ == "__main__":
     opte = OTPEstimator(path+'/training/plug/mixed/hrc_traj_')
 
     ##### record training data
-    # opte.record_data(5)
+    # opte.record_data(3)
     # if (len(sys.argv) < 2):
     #     raise SyntaxError("Insufficient arguments")
     # opte.save_training_data(int(sys.argv[1]))
     # alarm()
+
+    ##### train promp
+    rospy.loginfo("Start training")
+    opte.train_promp(n_basis=20, n_demos=35, n_dof=10)
+    opte.promp.main()
+    rospy.loginfo("Training completed")
 
     ##### print numpy array format data
     # opte.test_conversion()
@@ -412,22 +566,25 @@ if __name__ == "__main__":
     # opte.publish_trajectory(resampled_traj)
     # opte.test_conversion(resampled_traj)
 
+    ##### publish mean trajectory
+    # mean_traj = opte.query_dynamic_mean_traj()
+    # resampled_traj = opte.trajectory_resampler(mean_traj, 2)
+    # print(resampled_traj)
+    # opte.publish_trajectory(resampled_traj)
     # msg = rospy.wait_for_message("/smoothed_trajectory", JointTrajectory)
+    # robot_msg = opte.interpolate_traj(msg)
+    # opte.robot_traj_pub.publish(robot_msg)
     # opte.plot_traj(msg, 1)
 
-    ##### train promp
-    rospy.loginfo("Start training")
-    opte.train_promp(n_basis=20, n_demos=35, n_dof=10)
-    opte.promp.main()
-    rospy.loginfo("Training completed")
 # 
     ##### plot mean trajectory
-    # plot_joint = 0
+    # plot_joint = 4
     # rospy.loginfo(f"plot joint {plot_joint}")
     # opte.promp.plot_mean_trajectory(plot_joint=plot_joint, plot_error=True)
     # target_point = opte.query_dynamic_mean_otp()
     # print("target position:\n", target_point.positions)
     # opte.publish_target_position([target_point])
+    # opte.publish_trajectory(opte.robot_joint_trajectory)
 
     ##### predict new trajectory given partial observation
     # updated_otp = opte.query_dynamic_otp()
@@ -435,10 +592,22 @@ if __name__ == "__main__":
     # opte.publish_target_position([updated_otp])
 
     ##### predict new trajectory with real human
-    opte.test_otp()
+    exp_time, pos_diff = opte.test_otp()
+    ## directly send end target
+    # exp_time, pos_diff = opte.test_target()
+    pos_diff = np.array(pos_diff)
+    pos_dis = 100*np.linalg.norm(pos_diff)
+
+    print(f"Experiment time: {exp_time}")
+    print(f"Position distance: {pos_dis}")
+
+    # np.savetxt(path+'/data/straight.csv', np.array(opte.real_socket_traj), delimiter=",")
+    # np.savetxt(path+'/data/curved.csv', np.array(opte.real_socket_traj), delimiter=",")
+    # np.savetxt(path+'/data/accelerated.csv', np.array(opte.real_socket_traj), delimiter=",")
+    print("file saved")
    
     # plt.show()
-    rospy.spin()
+    # rospy.spin()
 
 
 
