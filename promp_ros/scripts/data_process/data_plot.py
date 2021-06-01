@@ -117,34 +117,68 @@ def plot_force():
     plt.tight_layout()
     plt.show()
 
-def plot_pattern():
-    fig = plt.figure(constrained_layout=True)
-    gs = fig.add_gridspec(2,3)
-    ax1 = fig.add_subplot(gs[0,:])
-    ax2 = fig.add_subplot(gs[1,0])
-    ax2.set_title("pattern 1")
-    ax3 = fig.add_subplot(gs[1,1])
-    ax3.set_title("pattern 2")
-    ax4 = fig.add_subplot(gs[1,2])
-    ax4.set_title("pattern 3")
-
-    plt.show()
-
 def plot_comparative_time():
-    f, (ax1, ax2) = plt.subplots(1, 2, gridspec_kw={'width_ratios':[4,2]}, figsize=(10,5))
+    # f, (ax1, ax2) = plt.subplots(1, 2, gridspec_kw={'width_ratios':[4,2]}, figsize=(10,5))
+    df = pd.read_csv(data_path+"/data/comparison_target.csv")
+    fig, ax = plt.subplots(figsize=(8,6))
+    ax.grid(True)
+    sns.barplot(x='Method', y='Time (s)', color='c', 
+                order=['proposed', 'baseline (phase=1)', 'baseline (phase=0.8)', 'baseline (phase=0.5)', 'direct tracking'],
+                data=df, ax=ax)
+    ax.bar_label(ax.containers[-1], padding=3)
 
     plt.tight_layout()
     plt.show()
 
 
-def plot_accuracy():
-    pass
+def plot_precision():
+    box_w = 0.5
+    df = pd.read_csv(data_path+"/data/comparison_target.csv")
+    fig, ax = plt.subplots(figsize=(8,6))
+    ax.grid(True)
+    sns.barplot(x='Method', y='Position Error (cm)', color='c', 
+                order=['proposed', 'baseline (phase=1)', 'baseline (phase=0.8)', 'baseline (phase=0.5)'], 
+                data=df,  ax=ax)
+    ax.bar_label(ax.containers[-1], padding=3)
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_pattern():
+    fig = plt.figure(constrained_layout=True)
+    gs = fig.add_gridspec(2,3)
+    ax1 = fig.add_subplot(gs[0,:])
+    ax2 = fig.add_subplot(gs[1,0])
+    ax3 = fig.add_subplot(gs[1,1])
+    ax4 = fig.add_subplot(gs[1,2])
+
+    df = pd.read_csv(data_path+"/data/comparison_target.csv")
+    df_selected = df[(df['Method']=='proposed')|(df['Method']=='baseline')]
+    ax1.grid(True)
+    sns.barplot(x='Pattern', y='Position Error (cm)', hue='Method', palette='PuBu', order=['straight', 'curved', 'accelerated'], 
+                data=df_selected, ax=ax1)
+    
+    straight = np.loadtxt(data_path+"/data/straight.csv", delimiter=",")
+    ax2.plot(straight[0:len(straight):10,0], straight[0:len(straight):10,1], marker=6)
+    ax2.set_xticks([-0.1, 0, 0.1])
+    curved = np.loadtxt(data_path+"/data/curved.csv", delimiter=",")
+    ax3.plot(curved[0:len(curved):10,0], curved[0:len(curved):10,1], marker=6)
+    ax3.set_xticks([-0.1, 0, 0.1])
+    accelerated = np.loadtxt(data_path+"/data/accelerated.csv", delimiter=",")
+    ax4.plot(accelerated[0:len(accelerated):10,0], accelerated[0:len(accelerated):10,1], marker=6)
+    ax4.set_xticks([-0.1, 0, 0.1])
+
+    # ax.bar_label(ax.containers[-1], padding=3)
+    plt.tight_layout()
+    plt.show()
+
 
 if __name__ == "__main__":
     # plot_time()
     # plot_force()
-    plot_comparative_time()
+    # plot_comparative_time()
+    plot_pattern()
+    # plot_precision()
     # plot_pattern()
-    pass
 
 
