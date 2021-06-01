@@ -28,7 +28,7 @@ class ProMP(object):
         self.dof = n_dof 
         self.demo_addr = demo_addr
         self.viapoints = []
-        self.obs_sigma = 1e-5
+        self.obs_sigma = 1e-3
         self.basis_sigma = self.dt * 5
         self.fix_length = True
 
