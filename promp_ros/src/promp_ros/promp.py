@@ -28,7 +28,7 @@ class ProMP(object):
         self.dof = n_dof 
         self.demo_addr = demo_addr
         self.viapoints = []
-        self.obs_sigma = 1e-2
+        self.obs_sigma = 1e-5
         self.basis_sigma = self.dt * 5
         self.fix_length = True
 
@@ -226,7 +226,7 @@ class ProMP(object):
         rospy.loginfo(f"standard data length: {ref_len}")
         return sync_data, ref_len, alpha, alpha_mean, alpha_std
 
-    def predict(self, obs_traj, phase_estimation=True):
+    def predict(self, obs_traj, phase_estimation=True, given_time=None):
         """
         Predict new trajectory based on observed trajectory
         Each viapoint has the following field:
@@ -263,12 +263,22 @@ class ProMP(object):
         # add viapoints from traj
         viapoints = []
         sigma = self.obs_sigma
-        for i, p in enumerate(obs_traj):
-            vp = {}
-            vp['t'] = i
-            vp['mean'] = p
-            vp['cov'] = sigma * np.identity(self.dof)
-            viapoints.append(vp)
+        if given_time is None:
+            for i, p in enumerate(obs_traj):
+                vp = {}
+                vp['t'] = i
+                vp['mean'] = p
+                vp['cov'] = sigma * np.identity(self.dof)
+                viapoints.append(vp)
+        else:
+            assert(len(given_time) == len(obs_traj)), "The given time should be the same length as obs_traj"
+            for i in range(len(given_time)):
+                rospy.loginfo("IN TEST")
+                vp = {}
+                vp['t'] = given_time[i]
+                vp['mean'] = obs_traj[i]
+                vp['cov'] = sigma * np.identity(self.dof)
+                viapoints.append(vp)
         
         # predict new trajectory based on given viapoints
         mean, cov = self.condition_viapoints(viapoints)

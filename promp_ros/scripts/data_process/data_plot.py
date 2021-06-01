@@ -27,6 +27,7 @@ def plot_time():
     figure = plt.figure(1, figsize=(8, 5))
     ## color
     col = 'k'
+    sns.set_style("whitegrid")
     
     ## Human robot (kf)
     ax1 = figure.add_subplot(131)
@@ -80,7 +81,8 @@ def plot_time():
 def plot_force():
     box_w = 0.5
     df_force = pd.read_csv(data_path+"/data/force.csv")
-    figure = plt.figure(figsize=(5,5))
+    figure = plt.figure(figsize=(5,4))
+    sns.set_style("whitegrid")
     ax = figure.add_subplot(111)
     d1 = df_force[(df_force['Sex']=='Male') & (df_force['Direction']=='x')]['Directional Force (N)']
     d2 = df_force[(df_force['Sex']=='Female') & (df_force['Direction']=='x')]['Directional Force (N)']
@@ -115,9 +117,34 @@ def plot_force():
     plt.tight_layout()
     plt.show()
 
+def plot_pattern():
+    fig = plt.figure(constrained_layout=True)
+    gs = fig.add_gridspec(2,3)
+    ax1 = fig.add_subplot(gs[0,:])
+    ax2 = fig.add_subplot(gs[1,0])
+    ax2.set_title("pattern 1")
+    ax3 = fig.add_subplot(gs[1,1])
+    ax3.set_title("pattern 2")
+    ax4 = fig.add_subplot(gs[1,2])
+    ax4.set_title("pattern 3")
+
+    plt.show()
+
+def plot_comparative_time():
+    f, (ax1, ax2) = plt.subplots(1, 2, gridspec_kw={'width_ratios':[4,2]}, figsize=(10,5))
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_accuracy():
+    pass
+
 if __name__ == "__main__":
     # plot_time()
-    plot_force()
+    # plot_force()
+    plot_comparative_time()
+    # plot_pattern()
     pass
 
 
