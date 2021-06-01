@@ -1,0 +1,22 @@
+Method,Pattern,Time (s),Position Error (cm)
+proposed,,3.49835,1.27203
+proposed,,3.84693,0.904282
+proposed,,5.72652,0.763818
+proposed,,3.80579,1.16052
+proposed,,4.17579,1.15226
+proposed,,4.08439,0.824156
+proposed,,6.07411,0.751203
+proposed,,4.21724,1.01208
+proposed,,3.28031,1.21273
+proposed,,3.64728,0.965244
+proposed,,3.40996,1.21668
+proposed,curve,6.05184,0.846466
+proposed,curve,5.29649,1.15572
+proposed,curve,6.11588,1.12128
+proposed,curve,5.57218,1.34272
+proposed,curve,6.46775,1.2534
+proposed,acceleration,5.85143,1.11813
+proposed,acceleration,4.97056,1.09819
+proposed,acceleration,4.76697,0.345286
+proposed,acceleration,5.78777,0.605595
+proposed,acceleration,5.17424,1.26611

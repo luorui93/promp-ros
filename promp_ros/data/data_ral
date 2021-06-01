@@ -1,0 +1,92 @@
+time+accuracy
+
+1: 
+elapsed time: 3.49835s
+distance difference: 0.0127203
+
+2: 
+elapsed time: 3.84693s
+distance difference: 0.00904282
+
+3:
+elapsed time: 5.72652s
+distance difference: 0.00763818
+
+4:
+elapsed time: 3.80579s
+distance difference: 0.0116052
+
+5:
+elapsed time: 4.17579s
+distance difference: 0.0115226
+
+6:
+elapsed time: 4.08439s
+distance difference: 0.00824156
+
+7:
+elapsed time: 6.07411s
+distance difference: 0.00751203
+
+8:
+elapsed time: 4.21724s
+distance difference: 0.0101208
+
+9:
+elapsed time: 3.28031s
+distance difference: 0.0121273
+
+10:
+elapsed time: 3.64728s
+distance difference: 0.00965244
+
+11:
+elapsed time: 3.40996s
+distance difference: 0.0121668
+
+---------------------------------------------
+pattern
+
+curve:
+1:
+elapsed time: 6.05184s
+distance difference: 0.00846466
+
+2:
+elapsed time: 5.29649s
+distance difference: 0.0115572
+
+3:
+elapsed time: 6.11588s
+distance difference: 0.0112128
+
+4:
+elapsed time: 5.57218s
+distance difference: 0.0134272
+
+5:
+elapsed time: 6.46775s
+distance difference: 0.012534
+
+acceleration:
+1:
+elapsed time: 5.85143s
+distance difference: 0.0111813
+
+2:
+elapsed time: 4.97056s
+distance difference: 0.0109819
+
+3:
+elapsed time: 4.76697s
+distance difference: 0.00345286
+
+4:
+elapsed time: 5.78777s
+distance difference: 0.00605595
+
+5:
+elapsed time: 5.17424s
+distance difference: 0.0126611
+
+---------------------------------------------
