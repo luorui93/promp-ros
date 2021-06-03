@@ -1,6 +1,7 @@
 from datetime import time
 from numpy.lib.function_base import insert
 import pandas as pd
+import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
 import scipy.stats as stats
@@ -21,6 +22,9 @@ pa_nokf = df[df['Plug Alignment']=='Without KF']
 insertion_p = df[df['Insertion']=='Passive']
 insertion_a = df[df['Insertion']=='Active']
 
+## pick blue and orange from default seaborn palette
+blue = sns.color_palette()[0]
+orange = sns.color_palette()[1]
 
 def plot_time():
     box_w = 0.5
@@ -119,13 +123,23 @@ def plot_force():
 
 def plot_comparative_time():
     # f, (ax1, ax2) = plt.subplots(1, 2, gridspec_kw={'width_ratios':[4,2]}, figsize=(10,5))
+    font = {'family' : 'normal',
+            'weight': 'bold',
+            'size'   : 8}
+    matplotlib.rc('font', **font)
     df = pd.read_csv(data_path+"/data/comparison_target.csv")
-    fig, ax = plt.subplots(figsize=(8,6))
-    ax.grid(True)
-    sns.barplot(x='Method', y='Time (s)', color='c', 
-                order=['proposed', 'baseline (phase=1)', 'baseline (phase=0.8)', 'baseline (phase=0.5)', 'direct tracking'],
-                data=df, ax=ax)
+    fig, ax = plt.subplots(figsize=(6, 3))
+    # plt horizontal grid only
+    clrs = ['gray', blue, blue, blue, orange]
+    ax.yaxis.grid(True)
+    # plot grid behind the graph
+    ax.set_axisbelow(True)
+    sns.barplot(x='Method', y='Time (s)', palette=clrs, 
+                order=['direct tracking', 'baseline (p=0.5)','baseline (p=0.8)','baseline (p=1)', 'proposed'], 
+                data=df, ax=ax, edgecolor='k')
     ax.bar_label(ax.containers[-1], padding=3)
+    ax.xaxis.label.set_size(14)
+    ax.yaxis.label.set_size(14)
 
     plt.tight_layout()
     plt.show()
@@ -133,19 +147,36 @@ def plot_comparative_time():
 
 def plot_precision():
     box_w = 0.5
+    font = {'family' : 'normal',
+            'weight': 'bold',
+            'size'   : 8}
+    matplotlib.rc('font', **font)
+    # change font size 
+    # sns.set_theme (font_scale=2.0, style="whitegrid")
     df = pd.read_csv(data_path+"/data/comparison_target.csv")
-    fig, ax = plt.subplots(figsize=(8,6))
-    ax.grid(True)
-    sns.barplot(x='Method', y='Position Error (cm)', color='c', 
-                order=['proposed', 'baseline (phase=1)', 'baseline (phase=0.8)', 'baseline (phase=0.5)'], 
-                data=df,  ax=ax)
+    fig, ax = plt.subplots(figsize=(5,3))
+    ax.yaxis.grid(True)
+    # plot grid behind the graph
+    ax.set_axisbelow(True)
+    # sns.set_style("whitegrid")
+    clrs = [blue, blue, blue, orange]
+    sns.barplot(x='Method', y='Position Error (cm)', palette=clrs, 
+                order=['baseline (p=0.5)','baseline (p=0.8)','baseline (p=1)', 'proposed'], 
+                data=df,  edgecolor='k', ax=ax)
     ax.bar_label(ax.containers[-1], padding=3)
+    ax.xaxis.label.set_size(14)
+    ax.yaxis.label.set_size(14)
 
     plt.tight_layout()
     plt.show()
 
 def plot_pattern():
-    fig = plt.figure(constrained_layout=True)
+    font = {'family' : 'normal',
+        'weight': 'bold',
+        'size'   : 18}
+
+    matplotlib.rc('font', **font)
+    fig = plt.figure(figsize=(10,8))
     gs = fig.add_gridspec(2,3)
     ax1 = fig.add_subplot(gs[0,:])
     ax2 = fig.add_subplot(gs[1,0])
@@ -154,19 +185,31 @@ def plot_pattern():
 
     df = pd.read_csv(data_path+"/data/comparison_target.csv")
     df_selected = df[(df['Method']=='proposed')|(df['Method']=='baseline')]
-    ax1.grid(True)
-    sns.barplot(x='Pattern', y='Position Error (cm)', hue='Method', palette='PuBu', order=['straight', 'curved', 'accelerated'], 
-                data=df_selected, ax=ax1)
-    
+    clrs = [blue, orange]
+    sns.barplot(x='Pattern', y='Position Error (cm)', hue='Method', palette=clrs, order=['straight', 'curved', 'accelerated'], 
+                data=df_selected, ax=ax1, edgecolor='k')
+    # sns.set_theme(style="whitegrid", font_scale=1.5)
+    # plt horizontal grid only
+    ax1.yaxis.grid(True)
+    # plot grid behind the graph
+    ax1.set_axisbelow(True)
     straight = np.loadtxt(data_path+"/data/straight.csv", delimiter=",")
+    ax1.set_xlabel("")
+    # ax1.tick_params(labelsize='large')
     ax2.plot(straight[0:len(straight):10,0], straight[0:len(straight):10,1], marker=6)
     ax2.set_xticks([-0.1, 0, 0.1])
+    # ax2.tick_params(labelsize='large')
+    ax2.set_xlabel("straight")
     curved = np.loadtxt(data_path+"/data/curved.csv", delimiter=",")
     ax3.plot(curved[0:len(curved):10,0], curved[0:len(curved):10,1], marker=6)
     ax3.set_xticks([-0.1, 0, 0.1])
+    ax3.set_xlabel("curved")
+    # ax3.tick_params(labelsize='large')
     accelerated = np.loadtxt(data_path+"/data/accelerated.csv", delimiter=",")
     ax4.plot(accelerated[0:len(accelerated):10,0], accelerated[0:len(accelerated):10,1], marker=6)
     ax4.set_xticks([-0.1, 0, 0.1])
+    ax4.set_xlabel("accelerated")
+    # ax4.tick_params(labelsize='large')
 
     # ax.bar_label(ax.containers[-1], padding=3)
     plt.tight_layout()
@@ -176,8 +219,8 @@ def plot_pattern():
 if __name__ == "__main__":
     # plot_time()
     # plot_force()
-    # plot_comparative_time()
-    plot_pattern()
+    plot_comparative_time()
+    # plot_pattern()
     # plot_precision()
     # plot_pattern()
 
