@@ -233,6 +233,7 @@ class ProMP(object):
         t: phase time of the viapoint
         mean: mean joint position of the viapoint
         cov: covariance matrix of the viapoint
+        given_time: specify the time for each point in obs_traj
 
         Returns:
         -------
