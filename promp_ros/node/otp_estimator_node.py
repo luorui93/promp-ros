@@ -4,7 +4,7 @@ import rospkg
 import numpy as np
 import sys
 from promp_ros.promp import ProMP
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, PoseStamped
 from sensor_msgs.msg import JointState
 from multiprocessing import Lock
 from apriltag_ros.msg import AprilTagDetectionArray, AprilTagDetection
@@ -39,7 +39,8 @@ class OTPEstimator(object):
         ## ROS subscribers
         kinova_sub_sync = message_filters.Subscriber("/my_gen3/joint_states", JointState)
         tag_sub_sync = message_filters.Subscriber("/tag_detections", AprilTagDetectionArray)
-        time_sync = message_filters.ApproximateTimeSynchronizer([kinova_sub_sync, tag_sub_sync], 10, slop=0.2)
+        tracker_sub_sync = message_filters.Subscriber("/wrist_pose", PoseStamped)
+        time_sync = message_filters.ApproximateTimeSynchronizer([kinova_sub_sync, tracker_sub_sync], 10, slop=0.2)
         tag_sub = rospy.Subscriber("/tag_detections", AprilTagDetectionArray, self.socket_pose_cb)
 
         #debug subscriber
@@ -175,15 +176,15 @@ class OTPEstimator(object):
         t = diff.secs * 1e3 + diff.nsecs * 1e-6
         return t
     
-    def message_sync_cb(self, robot_msg, socket_msg):
+    def message_sync_cb(self, robot_msg, tracker_msg):
         """
         Synchronize robot joint states trajectory and socket pose trajectory
         """
-        if (self.start_record and len(socket_msg.detections)>0):
+        if (self.start_record):
             if (len(self.sample_time) == 0):
                 self.init_time = robot_msg.header.stamp
             robot_time = robot_msg.header.stamp
-            socket_time = socket_msg.header.stamp
+            socket_time = tracker_msg.header.stamp
             # add a small displacement to time
             t = self.diff_time(robot_time, self.init_time)
             self.sample_time.append(t)
@@ -200,7 +201,7 @@ class OTPEstimator(object):
 
             # add socket pose in kinect frame to trajectory
             # geometry_msgs/Pose
-            self.socket_trajectory.append(socket_msg.detections[0].pose.pose.pose)
+            self.socket_trajectory.append(tracker_msg.pose)
 
             self.robot_joint_trajectory.append(sample_point)
     
@@ -556,7 +557,7 @@ if __name__ == "__main__":
 
     ##### train promp
     rospy.loginfo("Start training")
-    opte.train_promp(n_basis=20, n_demos=35, n_dof=10)
+    opte.train_promp(n_basis=20, n_demos=10, n_dof=10)
     opte.promp.main()
     rospy.loginfo("Training completed")
 
