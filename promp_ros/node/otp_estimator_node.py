@@ -542,8 +542,10 @@ if __name__ == "__main__":
     rospy.init_node("otp_estimator", log_level=rospy.INFO)
 
     r = rospkg.RosPack()
-    path = r.get_path('promp_ros')
-    opte = OTPEstimator(path+'/training/plug/mixed/hrc_traj_')
+    path = r.get_path('promp_ros')+'/training/plug/mixed/hrc_traj_'
+
+    path = '/home/riverlab/kinova_ws/src/kortex_playground/sync_data/sync'
+    opte = OTPEstimator(path)
 
     ##### record training data
     # opte.record_data(3)

@@ -44,9 +44,3 @@ include_directories(
     ${catkin_INCLUDE_DIRS}
 )
 
-add_executable(message_filter_node src/message_filter.cpp)
-target_link_libraries(message_filter_node ${catkin_LIBRARIES})
-add_dependencies(message_filter_node 
-	${${PROJECT_NAME}_EXPORTED_TARGETS} 
-	${catkin_EXPORTED_TARGETS}
-)

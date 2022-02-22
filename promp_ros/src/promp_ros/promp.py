@@ -20,7 +20,7 @@ def timeit(method):
     return timed
 
 class ProMP(object):
-    def __init__(self, dt, n_basis, demo_addr, n_demos, n_dof):
+    def __init__(self, dt, n_basis, demo_addr, n_demos, n_dof=7):
         self.dt = dt
         self.n_basis = n_basis
         self.n_demos = n_demos
@@ -532,7 +532,8 @@ class ProMP(object):
 
 
 if __name__ == "__main__":
-    pmp = ProMP(dt=0.5, n_basis=20, demo_addr='../training/letter/letterAtr', n_demos=8)
+    demo_addr = '/home/riverlab/kinova_ws/src/kortex_playground/sync_data/sync'
+    pmp = ProMP(dt=0.5, n_basis=20, demo_addr=demo_addr, n_demos=10, n_dof=10)
 
     # train model
     pmp.main()
@@ -544,7 +545,9 @@ if __name__ == "__main__":
 
     #################################################
     # example for predicting new trajctory given partial observation
-    test_traj = np.loadtxt(open("../training/plug/file_output_9"), delimiter=",")
+    test_addr = demo_addr + "5.csv"
+    original_test_addr = "../training/plug/file_output_9"
+    test_traj = np.loadtxt(open(test_addr), delimiter=",")
     partial_traj = test_traj[0:10,]
 
     # we need to pad the partial trajectory as the same standard format, fill unknown value with np.nan
