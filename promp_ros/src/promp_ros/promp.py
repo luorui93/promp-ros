@@ -37,7 +37,7 @@ class ProMP(object):
         Main function for ProMP
         """
         # demos: n_samples x n_demos matrix
-        cols = [0, 1, 2, 3, 4, 5, 6, 14, 15, 16]
+        cols = [7, 8, 9, 10, 11, 12, 13, 21, 22, 23]
         self.demos = self.import_demonstrations(cols)
         # print(f"demos: {self.demos[0].shape}")
         # self.demos is a list containing all training trajectories
@@ -263,7 +263,7 @@ class ProMP(object):
         
         # add viapoints from traj
         viapoints = []
-        sigma = self.obs_sigma
+        sigma = self.obs_sigmar
         if given_time is None:
             for i, p in enumerate(obs_traj):
                 vp = {}

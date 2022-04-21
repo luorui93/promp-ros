@@ -7,7 +7,7 @@ from promp_ros.promp import ProMP
 from geometry_msgs.msg import Pose, PoseStamped
 from sensor_msgs.msg import JointState
 from multiprocessing import Lock
-from apriltag_ros.msg import AprilTagDetectionArray, AprilTagDetection
+# from apriltag_ros.msg import AprilTagDetectionArray, AprilTagDetection
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from moveit_msgs.msg import RobotTrajectory
 import message_filters
@@ -38,10 +38,11 @@ class OTPEstimator(object):
 
         ## ROS subscribers
         kinova_sub_sync = message_filters.Subscriber("/my_gen3/joint_states", JointState)
-        tag_sub_sync = message_filters.Subscriber("/tag_detections", AprilTagDetectionArray)
+        # tag_sub_sync = message_filters.Subscriber("/tag_detections", AprilTagDetectionArray)
         tracker_sub_sync = message_filters.Subscriber("/wrist_pose", PoseStamped)
         time_sync = message_filters.ApproximateTimeSynchronizer([kinova_sub_sync, tracker_sub_sync], 10, slop=0.2)
-        tag_sub = rospy.Subscriber("/tag_detections", AprilTagDetectionArray, self.socket_pose_cb)
+        # tag_sub = rospy.Subscriber("/tag_detections", AprilTagDetectionArray, self.socket_pose_cb)
+        tracker_sub = rospy.Subscriber("/wrist_pose", PoseStamped, self.socket_pose_cb)
 
         #debug subscriber
         time_sync.registerCallback(self.message_sync_cb)
@@ -158,15 +159,12 @@ class OTPEstimator(object):
     def socket_pose_cb(self, msg):
         if (self.start_timer):
             with self.socket_lock:
-                if len(msg.detections) > 0:
-                    self.sock_pose = msg.detections[0].pose.pose.pose
-                    pose = []
-                    pose.append(self.sock_pose.position.x)
-                    pose.append(self.sock_pose.position.y)
-                    pose.append(self.sock_pose.position.z)
-                    self.real_socket_traj.append(pose)
-                else:
-                    rospy.logwarn_throttle(10, "tag not detected")
+                self.sock_pose = msg.pose
+                pose = []
+                pose.append(self.sock_pose.position.x)
+                pose.append(self.sock_pose.position.y)
+                pose.append(self.sock_pose.position.z)
+                self.real_socket_traj.append(pose)
 
     def diff_time(self, cur_time, init_time):
         """
