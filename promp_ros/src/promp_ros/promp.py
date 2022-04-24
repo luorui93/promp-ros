@@ -7,17 +7,6 @@ from scipy.linalg import block_diag
 import rospy
 from rospy.core import rospyerr
 
-eps = 1e-10
-
-def timeit(method):
-    def timed(*args, **kw):
-        ts = time.time()
-        result = method(*args, **kw)
-        te = time.time()        
-        t = (te - ts) * 1000
-        print (f"{method.__name__} lasts {t}ms")
-        return result    
-    return timed
 
 class ProMP(object):
     def __init__(self, dt, n_basis, demo_addr, n_demos, n_dof=7):
@@ -39,24 +28,13 @@ class ProMP(object):
         # demos: n_samples x n_demos matrix
         cols = [7, 8, 9, 10, 11, 12, 13, 21, 22, 23]
         self.demos = self.import_demonstrations(cols)
-        # print(f"demos: {self.demos[0].shape}")
-        # self.demos is a list containing all training trajectories
-        # each trajectory is in the format of n_samples x n_dof
-        # self.demos = self.add_demonstration()
+        self.sync_demos = self.demos
+        self.ref_len = self.demos[0].shape[0]
+        self.alpha_mean = 1.0
 
-        # synchronize phase of demonstration trajectories
-        if (not self.fix_length):
-            self.sync_demos, self.ref_len, self.alpha, self.alpha_mean, self.alpha_std = self.sync_trajectory()
-        else:
-            self.sync_demos = self.demos
-            self.ref_len = self.demos[0].shape[0]
-            self.alpha_mean = 1.0
-        # start diverging
-        # print(self.sync_demos[2])
         # obtain necessary information from synced demonstrations
         self.n_samples = self.sync_demos[0].shape[0]
-        # print(f"ref n_samples: {self.n_samples}")
-        # self.dof = self.sync_demos[0].shape[1]
+
 
         # Generate Basis
         # Phi_norm: n_samples x n_basis matrix
@@ -70,13 +48,7 @@ class ProMP(object):
         # learn weight using least square regression
         # weights: a dictionary storing information for weight matrix
         self.weights = self.learn_weight()
-        # print(self.weights['mean'])
 
-        # print(self.PHI.shape)
-        # np.savetxt('../training/trained/weight_cov.csv', self.weights['cov'], delimiter=",")
-        # np.savetxt('../training/trained/weight_mean.csv', self.weights['mean'], delimiter=",")
-        # update mean and cov based on viapoints
-        # self.condition_viapoints()
 
     def import_demonstrations(self, cols=None):
         """
@@ -93,14 +65,12 @@ class ProMP(object):
             except OSError:
                 rospy.logwarn(f"{addr} is not found")
                 continue
-            # traj = np.hstack((human, robot))
             if (ref_len == 0):
                 ref_len = training_data.shape[0]
             if cols is not None:
                 if self.fix_length and training_data.shape[0] != ref_len:
                     raise ValueError(f"File {i+1} has data length{training_data.shape[0]}")
                 data.append(training_data[:,cols])
-                # print(data[-1].shape)
             else:
                 data.append(training_data)
 
@@ -156,7 +126,6 @@ class ProMP(object):
         # convert Y into compatible format for linear regression
         # print(f"Y shape {Y.shape}")
         w = np.linalg.solve(self.PHI.T@self.PHI, np.dot(self.PHI.T, Y))
-        # print(f"w shape: {w.shape}")
 
         # The weight value for each dimension is treated as a Gaussian random variable
         # The mean value is calculated across multiple demos instead of different dimensions.
@@ -195,37 +164,6 @@ class ProMP(object):
         return Y
 
 
-    def sync_trajectory(self):
-        """
-        Synchornize trajctories with same time scale
-        """
-        dof = self.demos[0].shape[1]
-        traj_len = np.array(list(map(lambda traj: len(traj), self.demos)))
-        ref_len = int(np.mean(traj_len))
-        alpha = traj_len / ref_len
-        alpha_mean = np.mean(alpha)
-        alpha_std  = np.std(alpha)
-
-        # time synchronize the data to contain same number of points for training
-        # resample all trajecotries to have same points as the "ideal" trajectory
-        # the new trajectory is obtained by interpolating the original data at scaled time point
-        sync_data = []
-        for i, a in enumerate(alpha):
-            resampled_data = np.empty((ref_len, dof))
-            for j in range(ref_len):
-                # the unwarped phase
-                z = j * a
-                floor_z = int(z)
-                if floor_z == self.demos[i].shape[0] - 1:
-                    scaled_value = self.demos[i][floor_z]
-                else:
-                    scaled_value = self.demos[i][floor_z] + (z-floor_z)*(self.demos[i][floor_z+1] - self.demos[i][floor_z])
-                resampled_data[j] = scaled_value
-            sync_data.append(resampled_data)
-        
-        rospy.loginfo(f"standard data length: {ref_len}")
-        return sync_data, ref_len, alpha, alpha_mean, alpha_std
-
     def predict(self, obs_traj, phase_estimation=True, given_time=None):
         """
         Predict new trajectory based on observed trajectory
@@ -241,29 +179,11 @@ class ProMP(object):
             a tuple which contains the mean and covariance matrix of the joint position on the predicted trajectory
         """
         # estimate alpha and resample the observation trajectory accordingly
-        if phase_estimation:
-            alpha, phase = self.estimate_phase(obs_traj)
-            obs_samples = obs_traj.shape[0]
-            obs_t = np.arange(obs_samples)
-            refact_t = np.linspace(0, obs_t[-1], int(obs_samples / alpha))
-            resampled_obs = np.empty((len(refact_t), obs_traj.shape[1]))
-            for i in range(obs_traj.shape[1]):
-                if np.isnan(obs_traj[0,i]):
-                    resampled_obs[:, i] = np.nan
-                else:
-                    # rospy.logdebug(f"refactored t: {refact_t}")
-                    resampled_obs[:, i] = np.interp(refact_t, obs_t, obs_traj[:,i])
-                # rospy.logdebug(f"resampled observation: {resampled_obs[:, i]}")
-            rospy.loginfo(f"[Phase estimation]: alpha is {alpha}, resampled from {obs_samples} points to {len(refact_t)} points")
-            obs_traj = resampled_obs
-        
-        else:
-            alpha = 1.0
-            phase = obs_traj.shape[0] / self.ref_len
+        phase = obs_traj.shape[0] / self.ref_len
         
         # add viapoints from traj
         viapoints = []
-        sigma = self.obs_sigmar
+        sigma = self.obs_sigma
         if given_time is None:
             for i, p in enumerate(obs_traj):
                 vp = {}
@@ -347,91 +267,6 @@ class ProMP(object):
         # save new mean and cov, compute new trajectory
         return mean, cov
     
-    def estimate_phase(self, padded_traj):
-        # partial_traj will be in the standard trajectory format
-        # rospy.logdebug(f"padded traj: \n{padded_traj}")
-        valid_cols = []
-        for i in range(padded_traj.shape[1]):
-            if np.isnan(padded_traj[0,i]):
-                continue
-            else:
-                valid_cols.append(i)
-        rospy.logdebug(f"valid cols in padded traj: {valid_cols}")
-        partial_traj = padded_traj[:, valid_cols]
-        # sample some alphas from the trained alpha distribution
-        # probably should evenly sample
-        alpha_samples = np.linspace(self.alpha_mean - 2*self.alpha_std, self.alpha_mean + 2*self.alpha_std, 30)
-        # print(f"alpha samples: \n{alpha_samples}")
-        # alpha_samples = np.random.normal(self.alpha_mean, self.alpha_std, 20)
-
-        # print(f"observed traj: \n{partial_traj}")
-        # compute the priori probability P(alpha)
-        rospy.logdebug(f"alpha list: {self.alpha}")
-        rospy.logdebug(f"alpha mean: {self.alpha_mean}, alpha std: {self.alpha_std}")
-        prior_alpha = multivariate_normal.pdf(x = alpha_samples, mean = self.alpha_mean, cov=4*self.alpha_std**2)
-
-        # do an outer product to compute a grid of z=alpha*t
-        nobs_samples = partial_traj.shape[0]
-        nobs_dof = partial_traj.shape[1]
-        ref_t = np.arange(nobs_samples)
-        # print(f"ref_t: {ref_t}")
-        z_grid = np.dot(alpha_samples[:,np.newaxis] ,ref_t[:,np.newaxis].T)
-        # print(f"z_grdi: {z_grid}")
-
-        obs_interp_traj = []
-
-        for z in z_grid:
-            # trajectory interpolates with one z for all dof
-            single_traj = np.array(list(map(lambda fp: np.interp(z, ref_t, fp), partial_traj.T))).T
-            obs_interp_traj.append(single_traj)
-        
-        # obs_interp_traj is a 3d matrix
-        # first dimension is the number of alpha
-        # in which each element is a n_samples(time_index) x dof trajectory
-        obs_interp_traj = np.array(obs_interp_traj)
-
-        # compute trajectory's trained mean and cov
-        mean, cov = self.compute_trajectory_stat(self.weights['mean'], self.weights['cov'])
-
-        # log posteriori
-        log_p = np.zeros(alpha_samples.shape)
-        for index in range(nobs_samples):
-            # retrieve trajectory point at the same time index with all possible alpha
-            sample = obs_interp_traj[:, index, :]
-
-            # compute likelihood for all alpha candidates at the same index 
-            # however, due to the partial nature of the observance, some dof might be missing
-            # so we are calculating the marginal probability of a multivariate gaussian
-            selector = [index + i*self.n_samples for i in valid_cols]
-            m = mean[selector]
-            # retrieve the correct covriance matrix from the concatenated big one
-            # x, y = np.mgrid[index:cov.shape[0]:self.n_samples, index:cov.shape[0]:self.n_samples]
-            x, y = np.meshgrid(selector, selector)
-            c = cov[x, y]
-            # c = np.identity(nobs_dof) * self.obs_sigma
-
-            # print(f"alpha*t sample: \n {sample}")
-            likelihood = multivariate_normal.pdf(x = sample, mean = m, cov=c)
-            posteriori = likelihood * prior_alpha
-            posteriori = posteriori / np.sum(posteriori)
-            log_p = log_p + np.log(posteriori)
-            # print(f"log posteriori: \n{log_p}")
-            # print(f"pdf: {result}")
-        
-        best_alpha = alpha_samples[np.argmax(log_p)]
-        # print(f"best alpha: {best_alpha}")
-        phase = ((nobs_samples - 1) / best_alpha) / self.ref_len
-        return best_alpha, phase
-
-        # for interp_y in obs_interp_traj:
-            
-    
-    def reshape_trajectory(self, column_traj):
-        """
-        Reshape a n_dof*n_sample x 1 column trajectory to standard format trajectory
-        """
-        matrix_traj = column_traj.reshape((self.dof, self.n_samples)).T
-        return matrix_traj
 
     def compute_trajectory_stat(self, weight_mean, weight_cov):
         """
@@ -446,124 +281,4 @@ class ProMP(object):
         # np.savetxt(self.demo_addr+'traj_cov.csv', new_traj_cov, delimiter=",")
 
         return new_traj_mean, new_traj_cov
-    
-    def plot_mean_trajectory(self, plot_joint=0, plot_error=False):
-        figure1 = plt.figure(1, figsize=(5,5))
-        ax = figure1.add_subplot(111)
-        ax.set_title(f"Mean trajectory joint {plot_joint}")
-        traj_mean, traj_cov = self.compute_trajectory_stat(self.weights['mean'], self.weights['cov'])
-
-        # reshape trajectory for plotting
-        format_traj = self.reshape_trajectory(traj_mean)
-
-        # only plot one joint 
-        joint = plot_joint
-        plot_traj = format_traj[:, joint]
-
-        t = np.linspace(0,1,self.n_samples)
-        ax.plot(t, plot_traj)
-        if plot_error:
-            # we only plot std deviation
-            std_full = np.sqrt(traj_cov.diagonal())
-            std_full = std_full.reshape((self.dof, self.n_samples)).T
-            std_joint = std_full[:, joint]
-
-            upper_y = plot_traj + std_joint
-            lower_y = plot_traj - std_joint
-            ax.fill_between(t, upper_y.flatten(), lower_y.flatten(), alpha=0.4)
-            
-
-        # plt.figure(2, figsize=(5,5))
-        # plt.title("J2 trajectory")
-        # plt.plot(np.linspace(0,1,self.n_samples), traj[:, 1], 'o')
-        plt.show()
-    
-    def plot_trajectory(self, traj, joint, title="Test", plot_error=False):
-        """
-        Parameters:
-        ----------
-        traj
-            a tuple contains the column trajectory mean and concatenated covariance matrix
-        joint
-            the specific joint trajectory to be plotted
-        """
-        plt.figure(2, figsize=(5,5))
-        plt.title(title)
-
-        mean = traj[0]
-        cov  = traj[1]
-        # reshape trajectory for plotting
-        format_traj = self.reshape_trajectory(mean)
-
-        # only plot one joint 
-        plot_traj = format_traj[:, joint]
-        t = np.linspace(0,1,len(plot_traj))
-        plt.plot(t, plot_traj)
-
-        if plot_error:
-            # we only plot std deviation
-            std_full = np.sqrt(cov.diagonal())
-            std_full = std_full.reshape((self.dof, self.n_samples)).T
-            std_joint = std_full[:, joint][0:len(plot_traj)]
-
-            upper_y = plot_traj + std_joint
-            lower_y = plot_traj - std_joint
-            plt.fill_between(t, upper_y.flatten(), lower_y.flatten(), alpha=0.4)
-        plt.show()
-
-    
-
-    ### define properties
-    # @property
-    # def num_demos(self):
-    #     return self.n_demos
-    
-    # @property
-    # def num_basis(self):
-    #     return self.n_basis
-
-    # @property
-    # def weights(self):
-    #     return self.weights
-    
-    
-    
-    #     return self.dt
-
-
-if __name__ == "__main__":
-    demo_addr = '/home/riverlab/kinova_ws/src/kortex_playground/sync_data/sync'
-    pmp = ProMP(dt=0.5, n_basis=20, demo_addr=demo_addr, n_demos=10, n_dof=10)
-
-    # train model
-    pmp.main()
-    # pmp.plot_mean_trajectory(plot_error=False)
-    # mean, _ = pmp.compute_trajectory_stat(pmp.weights['mean'], pmp.weights['cov'])
-    # traj = pmp.reshape_trajectory(mean)
-    # print(f"trained trajectory mean: \n{traj}")
-    # print(f"trained cov: {pmp.weights['cov']}")
-
-    #################################################
-    # example for predicting new trajctory given partial observation
-    test_addr = demo_addr + "5.csv"
-    original_test_addr = "../training/plug/file_output_9"
-    test_traj = np.loadtxt(open(test_addr), delimiter=",")
-    partial_traj = test_traj[0:10,]
-
-    # we need to pad the partial trajectory as the same standard format, fill unknown value with np.nan
-    # here we assume the joint 3 and 4 value are unknown
-    # nan_traj = np.empty(partial_traj.shape)
-    # nan_traj[:] = np.nan
-    # padded_traj = np.hstack((partial_traj, nan_traj))
-
-    # return the updated trajectory mean and cov
-    # traj_stat = pmp.predict(padded_traj)
-    # reformat the obtained column trajectory
-    # mat_traj = pmp.reshape_trajectory(traj_stat[0])
-
-    # pmp.plot_trajectory(traj=traj_stat, joint=0, title="Updated J1 Trajectory", plot_error=False)
-    # print(f"updated cov: {pmp.weights['updated_cov']}")
-
-    alpha, phase = pmp.estimate_phase(partial_traj)
-
     

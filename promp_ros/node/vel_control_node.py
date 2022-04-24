@@ -21,10 +21,6 @@ from scipy.interpolate import CubicSpline, splrep, splev
 import os
 import tf2_ros
 
-def alarm():
-    duration = 0.5 # seconds
-    freq = 440  # Hz
-    os.system('play -nq -t alsa synth {} sine {}'.format(duration, freq))
 
 class OTPEstimator(object):
     def __init__(self, data_addr):
@@ -133,7 +129,7 @@ class OTPEstimator(object):
     ############################TEST FUNCTIONS############################3
 
     def test_vel(self):
-        r = rospy.Rate(40)
+        r = rospy.Rate(90)
         input("Enter to start experiment")
         self.start_timer = True
         start_time = rospy.Time.now()
@@ -160,13 +156,14 @@ class OTPEstimator(object):
         self.robot_vel_pub.publish(base_joint_speeds)
 
 
+
 if __name__ == "__main__":
     rospy.init_node("otp_estimator", log_level=rospy.INFO)
 
     r = rospkg.RosPack()
     path = r.get_path('promp_ros')+'/training/plug/mixed/hrc_traj_'
 
-    path = '/home/riverlab/kinova_ws/src/kortex_playground/sync_data/sync'
+    path = '/home/riverlab/kinova_ws/src/kortex_playground/train_data/sync'
     opte = OTPEstimator(path)
 
     ##### train promp
@@ -177,6 +174,8 @@ if __name__ == "__main__":
 
 
     opte.test_vel()
+    
+    
 
 
 
